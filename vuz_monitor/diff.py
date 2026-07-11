@@ -62,7 +62,7 @@ def compute_status(
         return None
 
     plan = plan_override if plan_override is not None else snap.meta.plan
-    total = snap.meta.total or len(snap.entrants)
+    total = snap.meta.total  # None when the source doesn't publish a size (e.g. Станкин)
     e = snap.by_code(code)
 
     if e is None:

@@ -25,7 +25,7 @@ State lives in a local SQLite file between runs.
 your standing under it. Set `group` at the top level (applies to all watches) or per
 watch. Omit it and each list becomes its own message.
 
-Each data source is a small **adapter**. Three ship today:
+Each data source is a small **adapter**. Four ship today:
 
 - `mirea_api` — a JSON REST endpoint (`priem.mirea.ru/competitions_api/entrants`).
   Reliable; the reference adapter. **Budget and paid lists share this endpoint and
@@ -34,6 +34,10 @@ Each data source is a small **adapter**. Three ship today:
 - `mpei_html` — МЭИ (`pk.mpei.ru`) HTML pages. Auto-detects budget vs paid, reads
   «вакантных мест» / «данные на …» from the page text, skips the 2-level table header,
   and ranks by row order. One watch per specialty page (`entrants_listNN.html`).
+- `stankin_html` — Станкин (`priem.stankin.ru`, Bitrix). The filter form GETs a
+  server-rendered grid at `/gridspisokpostupayushchikh/`; filtering by `PROPERTY_423=<код>`
+  returns the applicant's row with their true rank. Columns mapped by header label; the
+  watch's `params:` carries the filter (основа / направление / код / …).
 - `html_table` — a generic HTML `<table>` scraper; map columns by cell index in config.
   Covers most own-site ВУЗ pages without new code.
 

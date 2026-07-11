@@ -59,8 +59,6 @@ def _specialty_block(report, show_code: bool) -> str:
     if report.error:
         return f"{head}\n– ⚠️ ошибка: {_esc(report.error)}"
 
-    meta = report.meta
-    plan = meta.plan if meta and meta.plan is not None else "—"
     paid = _is_paid(report.title) or _is_paid(report.group)
     lines = [head]
     for cr in report.codes:
@@ -71,16 +69,28 @@ def _specialty_block(report, show_code: bool) -> str:
             lines.append("– ❌ не найден в списке")
         else:
             lines.append(f"– балл: {_g(st.final_score)}")
-            lines.append(
-                f"– место: {st.place}{_place_delta(cr)} из {st.total} (всего {plan} мест)"
-            )
+            # total / plan may be unknown (e.g. Станкин) — omit those parts then.
+            place_line = f"– место: {st.place}{_place_delta(cr)}"
+            if st.total is not None:
+                place_line += f" из {st.total}"
+            if st.plan is not None:
+                place_line += f" (всего {st.plan} мест)"
+            lines.append(place_line)
             if paid:
-                # «Соблюдены условия для платного» = поле accepted (тот же флаг, что
-                # «согласие» на бюджете), а НЕ pc. У МЭИ условия = договор И оплата,
-                # и показываем расшифровку.
+                # ВП-флаги важны и на платном (сигнал прохождения) — показываем их тоже.
+                # «Соблюдены условия для платного» = accepted / наличие договора (у МЭИ
+                # = договор И оплата), с расшифровкой.
+                lines.append(
+                    f"– ВП прох./основ.: {_pass_real(st.passing_real)} · {_yesno(st.passing_main)}"
+                )
                 line = f"– Соблюдены условия для платного: {_yesno(st.consent)}"
-                if st.contract is not None or st.payment is not None:
-                    line += f" (договор: {_yesno(st.contract)}, оплата: {_yesno(st.payment)})"
+                detail = []
+                if st.contract is not None:
+                    detail.append(f"договор: {_yesno(st.contract)}")
+                if st.payment is not None:
+                    detail.append(f"оплата: {_yesno(st.payment)}")
+                if detail:
+                    line += f" ({', '.join(detail)})"
                 lines.append(line)
             else:
                 lines.append(
@@ -91,12 +101,8 @@ def _specialty_block(report, show_code: bool) -> str:
                     lines.append(
                         f"– Общежитие: {'требуется' if st.needs_dormitory else 'не требуется'}"
                     )
-        exclude = (
-            {"place", "passing_real", "passing_main", "paid_ok"}
-            if paid
-            else {"place", "paid_ok"}
-        )
-        lines += _change_lines(cr, exclude=exclude, is_paid=paid)
+        # place shown inline; paid_ok (МИРЭА pc) unused. ВП/consent tracked on both.
+        lines += _change_lines(cr, exclude={"place", "paid_ok"}, is_paid=paid)
     return "\n".join(lines)
 
 
@@ -192,14 +198,15 @@ def _group_message(group_name: str, reports: list) -> list:
     codes = _distinct_codes(reports)
     single = len(codes) == 1
     vuz, konkurs = _split_group(group_name)
-    upd = f"обновлено {_fmt_source_time(_group_updated_at(reports))}"
+    upd_raw = _group_updated_at(reports)
+    upd = f" · обновлено {_fmt_source_time(upd_raw)}" if upd_raw else ""
 
     if single and vuz and konkurs:
-        header = f"🎓 {_esc(vuz)} — <b>{_esc(codes[0])}</b> · {_esc(konkurs)} · {upd}"
+        header = f"🎓 {_esc(vuz)} — <b>{_esc(codes[0])}</b> · {_esc(konkurs)}{upd}"
     elif single:
-        header = f"🎓 {_esc(group_name)} — <b>{_esc(codes[0])}</b> · {upd}"
+        header = f"🎓 {_esc(group_name)} — <b>{_esc(codes[0])}</b>{upd}"
     else:
-        header = f"🎓 <b>{_esc(group_name)}</b> · {upd}"
+        header = f"🎓 <b>{_esc(group_name)}</b>{upd}"
 
     blocks = [_specialty_block(r, show_code=not single) for r in reports]
     return _pack(header, blocks)
