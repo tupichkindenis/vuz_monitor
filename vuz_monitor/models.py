@@ -35,6 +35,8 @@ class Entrant:
     passing_main: Optional[bool] = None    # Основной ВП: guaranteed if consent given in time (models all-consent)
     passing_real: Optional[bool] = None    # Проходной ВП: would be admitted per CURRENT consents
     paid_ok: Optional[bool] = None         # Соблюдены условия для платного: contract signed + paid
+    contract: Optional[bool] = None        # МЭИ paid: «Договор» (contract signed)
+    payment: Optional[bool] = None         # МЭИ paid: «Оплата» (payment made)
     needs_dormitory: Optional[bool] = None # Потребность в общежитии (shown on budget lists)
     is_bvi: bool = False                   # без вступительных испытаний
     is_active: bool = True

@@ -25,16 +25,19 @@ State lives in a local SQLite file between runs.
 your standing under it. Set `group` at the top level (applies to all watches) or per
 watch. Omit it and each list becomes its own message.
 
-Each data source is a small **adapter**. Two ship today:
+Each data source is a small **adapter**. Three ship today:
 
 - `mirea_api` — a JSON REST endpoint (`priem.mirea.ru/competitions_api/entrants`).
   Reliable; the reference adapter. **Budget and paid lists share this endpoint and
   response shape** — only the competition id differs (take it from the site page URL's
   `comp_ids=`), so one watch per competition id is all you need.
+- `mpei_html` — МЭИ (`pk.mpei.ru`) HTML pages. Auto-detects budget vs paid, reads
+  «вакантных мест» / «данные на …» from the page text, skips the 2-level table header,
+  and ranks by row order. One watch per specialty page (`entrants_listNN.html`).
 - `html_table` — a generic HTML `<table>` scraper; map columns by cell index in config.
   Covers most own-site ВУЗ pages without new code.
 
-Adding a university = one adapter (or reuse `html_table`), everything else is shared.
+Adding a university = one adapter (or reuse `html_table` / `mpei_html`), everything else is shared.
 
 ## Setup
 

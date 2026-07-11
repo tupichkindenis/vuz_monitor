@@ -61,7 +61,7 @@ def _specialty_block(report, show_code: bool) -> str:
 
     meta = report.meta
     plan = meta.plan if meta and meta.plan is not None else "—"
-    paid = _is_paid(report.title)
+    paid = _is_paid(report.title) or _is_paid(report.group)
     lines = [head]
     for cr in report.codes:
         st = cr.status
@@ -76,8 +76,12 @@ def _specialty_block(report, show_code: bool) -> str:
             )
             if paid:
                 # «Соблюдены условия для платного» = поле accepted (тот же флаг, что
-                # «согласие» на бюджете), а НЕ pc.
-                lines.append(f"– Соблюдены условия для платного: {_yesno(st.consent)}")
+                # «согласие» на бюджете), а НЕ pc. У МЭИ условия = договор И оплата,
+                # и показываем расшифровку.
+                line = f"– Соблюдены условия для платного: {_yesno(st.consent)}"
+                if st.contract is not None or st.payment is not None:
+                    line += f" (договор: {_yesno(st.contract)}, оплата: {_yesno(st.payment)})"
+                lines.append(line)
             else:
                 lines.append(
                     f"– ВП прох./основ.: {_pass_real(st.passing_real)} · {_yesno(st.passing_main)}"
@@ -109,6 +113,10 @@ def _change_text(ch, is_paid: bool = False) -> str:
     if f == "consent":
         label = "Соблюдены условия для платного" if is_paid else "согласие"
         return f"• {label}: {_yesno(ch.old)} → {_yesno(ch.new)}"
+    if f == "contract":
+        return f"• договор: {_yesno(ch.old)} → {_yesno(ch.new)}"
+    if f == "payment":
+        return f"• оплата: {_yesno(ch.old)} → {_yesno(ch.new)}"
     if f == "passing_real":
         return f"• Проходной ВП: {_pass_real(ch.old)} → {_pass_real(ch.new)}"
     if f == "passing_main":

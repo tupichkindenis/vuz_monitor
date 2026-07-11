@@ -4,10 +4,12 @@ from __future__ import annotations
 from .base import Adapter
 from .html_table import HtmlTableAdapter
 from .mirea_api import MireaApiAdapter
+from .mpei_html import MpeiHtmlAdapter
 
 _REGISTRY = {
     "mirea_api": MireaApiAdapter,
     "html_table": HtmlTableAdapter,
+    "mpei_html": MpeiHtmlAdapter,
 }
 
 

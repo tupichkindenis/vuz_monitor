@@ -24,6 +24,8 @@ class CodeStatus:
     passing_main: Optional[bool]        # Основной ВП
     passing_real: Optional[bool]        # Проходной ВП
     paid_ok: Optional[bool]             # условия для платного
+    contract: Optional[bool]            # МЭИ paid: договор
+    payment: Optional[bool]             # МЭИ paid: оплата
     needs_dormitory: Optional[bool]     # потребность в общежитии
     ahead: int                          # entrants ranked above (context)
     total: Optional[int]
@@ -44,6 +46,8 @@ _TRACKED_FIELDS = (
     "final_score",
     "priority",
     "consent",
+    "contract",
+    "payment",
     "passing_real",
     "passing_main",
     "paid_ok",
@@ -65,7 +69,8 @@ def compute_status(
         return CodeStatus(
             code_display=code, present=False, place=None, priority=None,
             final_score=None, consent=False, passing_main=None, passing_real=None,
-            paid_ok=None, needs_dormitory=None, ahead=0, total=total, plan=plan,
+            paid_ok=None, contract=None, payment=None, needs_dormitory=None,
+            ahead=0, total=total, plan=plan,
         )
 
     ahead = (
@@ -83,6 +88,8 @@ def compute_status(
         passing_main=e.passing_main,
         passing_real=e.passing_real,
         paid_ok=e.paid_ok,
+        contract=e.contract,
+        payment=e.payment,
         needs_dormitory=e.needs_dormitory,
         ahead=ahead,
         total=total,
