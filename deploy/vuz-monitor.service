@@ -1,0 +1,15 @@
+# systemd oneshot unit — runs a single monitor cycle, then exits.
+# Install to /etc/systemd/system/ (adjust User, paths, and the env file).
+[Unit]
+Description=vuz_monitor — check конкурсные списки and notify Telegram
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=vuz
+WorkingDirectory=/opt/vuz_monitor
+EnvironmentFile=/opt/vuz_monitor/.env
+ExecStart=/opt/vuz_monitor/.venv/bin/python -m vuz_monitor run
+# Be gentle if a run overlaps or hangs.
+TimeoutStartSec=300

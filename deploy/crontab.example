@@ -1,0 +1,5 @@
+# Alternative to the systemd timer. Install with: crontab -e
+# Runs once an hour. Loads .env, uses the project venv.
+# TELEGRAM_BOT_TOKEN is read from /opt/vuz_monitor/.env by python-dotenv.
+
+@hourly cd /opt/vuz_monitor && .venv/bin/python -m vuz_monitor run >> /opt/vuz_monitor/cron.log 2>&1

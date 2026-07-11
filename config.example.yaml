@@ -1,0 +1,71 @@
+# Copy to config.yaml and edit. config.yaml is gitignored.
+# The bot token comes from the TELEGRAM_BOT_TOKEN environment variable (or .env),
+# NOT from this file.
+
+telegram:
+  chat_id: "123456789"        # your Telegram chat id (see: python -m vuz_monitor get-chat-id)
+
+# How often to send a message:
+#   always          - send every run (hourly heartbeat + diffs)   <- your choice
+#   on_change_only  - send only when something changed
+#   daily           - send on change, plus one heartbeat per day
+heartbeat: always
+
+# Which field identifies you in the list. For mirea_api:
+#   superCode - код участника (default)   snils - СНИЛС   id - row id
+# (html_table ignores this; it uses columns.code instead.)
+# Note: the MIREA API has no ИНН field.
+code_field: superCode
+
+# Your код участника (superCode) to find in every list.
+# Formatting (spaces/dashes) does not matter; matched by digits only.
+tracked_codes:
+  - "1287292"
+
+# Local SQLite state file (gitignored).
+db_path: state.db
+
+watches:
+  # --- MIREA JSON API. Budget and paid lists use the SAME endpoint + response
+  #     structure; only the competition id differs. Find the id in the site URL:
+  #     .../competition?comp_ids=<THIS>&... -> put it in competitions[].
+  #     (org_unit_id / edu_form_id from the page URL are NOT needed here.) ---
+  # `group`: lists sharing a group go into ONE Telegram message (e.g. all budget
+  # specialties of a ВУЗ). Set it per-watch, or once at the top level to apply to
+  # all watches. Omit -> each list is its own message.
+  - name: "Интеллектуальные системы (бюджет)"
+    group: "МИРЭА — бюджет"
+    adapter: mirea_api
+    url: "https://priem.mirea.ru/competitions_api/entrants"
+    params:
+      "competitions[]": "1862638623056207158"   # бюджет competition id
+      edu_level: 2
+    plan_override: null          # override places if the API omits `plan`
+    codes: null                  # null -> use tracked_codes above
+
+  - name: "Интеллектуальные системы (договор)"
+    group: "МИРЭА — договор"
+    adapter: mirea_api
+    url: "https://priem.mirea.ru/competitions_api/entrants"
+    params:
+      "competitions[]": "1862638623058304310"   # договор competition id
+      edu_level: 2
+    codes: null
+
+  # --- Generic HTML table source. Map columns by 0-based cell index. ---
+  # - name: "Пример ВУЗ — Прикладная информатика"
+  #   adapter: html_table
+  #   url: "https://example-vuz.ru/lists/spec1.html"
+  #   encoding: "windows-1251"   # omit for utf-8
+  #   table_selector: "table.competition"   # CSS selector; omit -> first <table>
+  #   columns:                   # which cell holds which field (0-based)
+  #     place: 0
+  #     code: 1                   # код участника column
+  #     priority: 2
+  #     final_score: 4
+  #     consent: 5               # cell text like "Да"/"+"/"оригинал" -> true
+  #     passing_main: 6          # optional: "Основной ВП" column ("Да" -> true)
+  #     passing_real: 7          # optional: "Проходной ВП" column ("Да" -> true)
+  #     paid_ok: 8               # optional: "Соблюдены условия для платного"
+  #   plan_override: 60          # HTML lists rarely publish the place count
+  #   codes: null

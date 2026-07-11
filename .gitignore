@@ -1,0 +1,20 @@
+# Secrets & local config
+.env
+config.yaml
+
+# State
+state.db
+*.db-journal
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# launchd/cron logs
+*.log

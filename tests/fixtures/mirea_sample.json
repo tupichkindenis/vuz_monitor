@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "id": "comp-1",
+      "title": "Интеллектуальные системы в гуманитарной сфере / договор",
+      "programSetTitle": "Интеллектуальные системы",
+      "compType": "общий конкурс",
+      "plan": 5,
+      "appCount": 6,
+      "appOriginalCount": 4,
+      "minScore": 81,
+      "updatedAt": "2026-07-10 15:17:40",
+      "isFinal": 0,
+      "entrants": [
+        {"id": "1", "snils": "111-111-111 11", "superCode": 1000001, "priority": 1, "finalMark": 300000, "entranceMark": 290000, "achievementMark": 10000, "marks": ["100 95 95"], "place": 1, "accepted": 1, "iHP": 1, "iHPO": 1, "pc": 0, "isBVI": 0, "isActive": 1},
+        {"id": "2", "snils": "222-222-222 22", "superCode": 1000002, "priority": 1, "finalMark": 295000, "entranceMark": 295000, "achievementMark": 0, "marks": ["100 100 95"], "place": 2, "accepted": 1, "iHP": 1, "iHPO": 0, "pc": 1, "isBVI": 0, "isActive": 1},
+        {"id": "3", "snils": "166-172-036 59", "superCode": 1287292, "priority": 11, "finalMark": 292000, "entranceMark": 282000, "achievementMark": 10000, "marks": ["100 92 90"], "place": 3, "accepted": 0, "iHP": 1, "iHPO": 0, "pc": 0, "needDormitory": 1, "isBVI": 0, "isActive": 1},
+        {"id": "4", "snils": "333-333-333 33", "superCode": 1000004, "priority": 1, "finalMark": 290000, "entranceMark": 290000, "achievementMark": 0, "marks": ["98 96 96"], "place": 4, "accepted": 1, "iHP": 0, "iHPO": 0, "pc": 0, "isBVI": 0, "isActive": 1},
+        {"id": "5", "snils": "444-444-444 44", "superCode": 1000005, "priority": 1, "finalMark": 288000, "entranceMark": 288000, "achievementMark": 0, "marks": ["96 96 96"], "place": 5, "accepted": 0, "iHP": 0, "iHPO": 0, "pc": 0, "isBVI": 0, "isActive": 1},
+        {"id": "6", "snils": "555-555-555 55", "superCode": 1000006, "priority": 1, "finalMark": 285000, "entranceMark": 285000, "achievementMark": 0, "marks": ["95 95 95"], "place": 6, "accepted": 1, "iHP": 0, "iHPO": 1, "pc": 0, "isBVI": 0, "isActive": 1}
+      ]
+    }
+  ]
+}

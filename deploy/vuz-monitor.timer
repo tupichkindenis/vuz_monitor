@@ -1,0 +1,14 @@
+# Hourly trigger for vuz-monitor.service.
+# Enable:  sudo systemctl enable --now vuz-monitor.timer
+[Unit]
+Description=Run vuz_monitor every hour
+
+[Timer]
+OnCalendar=hourly
+# Fire a missed run after downtime (laptop/server was off at the top of the hour).
+Persistent=true
+# Spread load / avoid hitting sites exactly on :00.
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
