@@ -764,10 +764,11 @@ body {
   margin:0; background:var(--bg); color:var(--fg);
   font:13px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing:antialiased;
+  height:100vh; height:100dvh; overflow:hidden;   /* one scroll region: the table */
 }
-.wrap-wide { max-width:1180px; margin:0 auto; padding:0 12px 40px; }
+.wrap-wide { max-width:1180px; margin:0 auto; padding:0 12px; height:100%; display:flex; flex-direction:column; }
 .topbar {
-  position:sticky; top:0; z-index:5; margin:0 -12px 10px; padding:10px 12px;
+  flex:0 0 auto; margin:0 -12px 8px; padding:10px 12px;
   background:var(--bg); border-bottom:1px solid var(--border);
 }
 .summary { font-size:13px; }
@@ -783,13 +784,13 @@ body {
   cursor:pointer; -webkit-appearance:none; appearance:none;
 }
 .chip.active { background:var(--accent); border-color:var(--accent); color:#fff; }
-.no-match { color:var(--muted); font-size:14px; padding:14px 2px; }
+.no-match { flex:0 0 auto; color:var(--muted); font-size:14px; padding:14px 2px; }
 [hidden] { display:none !important; }
-.table-scroll { overflow-x:auto; }
+.table-scroll { flex:1 1 auto; min-height:0; overflow:auto; }   /* scrolls both axes; header sticks inside */
 #grid { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
 #grid th, #grid td { padding:5px 8px; text-align:left; border-bottom:1px solid var(--border); white-space:nowrap; }
 #grid thead th {
-  position:sticky; top:var(--topbar-h, 92px); z-index:4; background:var(--bg); cursor:pointer;
+  position:sticky; top:0; z-index:4; background:var(--bg); cursor:pointer;
   user-select:none; font-weight:600; color:var(--muted); border-bottom:2px solid var(--border);
 }
 #grid thead th[data-nosort] { cursor:default; }
@@ -813,7 +814,7 @@ body {
 #grid tbody tr.pass-main td:first-child { box-shadow:inset 3px 0 var(--amber); }
 #grid tbody tr.absent, #grid tbody tr.nodata { opacity:.6; }
 #grid tbody tr:hover { background:var(--hover); }
-.foot { font-size:11px; color:var(--muted); text-align:center; margin-top:14px; }
+.foot { flex:0 0 auto; font-size:11px; color:var(--muted); text-align:center; padding:8px 0 4px; }
 .empty { color:var(--muted); text-align:center; padding:16px; }
 """
 
@@ -824,14 +825,7 @@ body {
 _TABLE_SCRIPT = """
 (function () {
   var table = document.getElementById('grid');
-  var topbar = document.querySelector('.topbar');
   var noMatch = document.querySelector('.no-match');
-
-  function setOffset() {
-    if (topbar) document.documentElement.style.setProperty('--topbar-h', topbar.offsetHeight + 'px');
-  }
-  setOffset();
-  window.addEventListener('resize', setOffset);
 
   // --- sortable columns ---
   if (table && table.tHead && table.tBodies.length) {
@@ -900,7 +894,6 @@ _TABLE_SCRIPT = """
         });
       });
       try { localStorage.setItem('vuz_table_filter', JSON.stringify(state)); } catch (e) {}
-      setOffset();
     };
     frows.forEach(function (row) {
       var dim = row.getAttribute('data-dim');
