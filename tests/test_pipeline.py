@@ -84,7 +84,7 @@ def test_dashboard_survives_render_error(tmp_path, monkeypatch):
     _patch(monkeypatch, tmp_path, _snap(w.watch_id))
     monkeypatch.setattr(pipeline.notify, "send_message", lambda *a, **k: None)
     monkeypatch.setattr(
-        pipeline.dashboard, "generate",
+        pipeline.dashboard, "render_pages",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     rc = pipeline.run(cfg, dry_run=False)
@@ -97,16 +97,17 @@ def test_dashboard_survives_render_error(tmp_path, monkeypatch):
 
 
 def test_build_dashboard_cli(tmp_path, monkeypatch):
-    """Standalone `dashboard` command regenerates from state.db, offline."""
+    """Standalone `dashboard` command regenerates BOTH pages from state.db, offline."""
     cfg = _cfg(tmp_path)
     w = cfg.watches[0]
-    # seed one snapshot + history via a run, then regenerate to a fresh path
+    # seed one snapshot + history via a run, then regenerate to a fresh dir
     _patch(monkeypatch, tmp_path, _snap(w.watch_id, place=7))
     monkeypatch.setattr(pipeline.notify, "send_message", lambda *a, **k: None)
     pipeline.run(cfg, dry_run=False)
 
-    out = tmp_path / "sub" / "d.html"
-    rc = pipeline.build_dashboard(cfg, out=str(out))
+    out_dir = tmp_path / "sub"
+    rc = pipeline.build_dashboard(cfg, out_dir=str(out_dir))
     assert rc == 0
-    assert out.exists()
-    assert "место 7" in out.read_text(encoding="utf-8")
+    assert (out_dir / "index.html").exists() and (out_dir / "table.html").exists()
+    assert "место 7" in (out_dir / "index.html").read_text(encoding="utf-8")
+    assert 'id="grid"' in (out_dir / "table.html").read_text(encoding="utf-8")

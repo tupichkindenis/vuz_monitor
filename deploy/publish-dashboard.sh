@@ -87,6 +87,7 @@ fi
 
 # --- stage the fresh page + Pages niceties -----------------------------------
 cp "$OUT" "$WT/index.html"
+[ -f docs/table.html ] && cp docs/table.html "$WT/table.html"   # desktop summary table
 : >"$WT/.nojekyll"                    # serve index.html verbatim, skip Jekyll
 git -C "$WT" add -A
 

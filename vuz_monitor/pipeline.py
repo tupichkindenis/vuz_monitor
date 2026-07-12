@@ -16,7 +16,7 @@ from .store import Store
 log = logging.getLogger("vuz_monitor")
 
 HEARTBEAT_META_KEY = "last_heartbeat_date"
-DASHBOARD_OUT = "docs/index.html"
+DASHBOARD_DIR = "docs"  # index.html (mobile cards) + table.html (desktop table)
 
 
 def _process_watch(
@@ -85,22 +85,28 @@ def _should_send_group(reports: list, mode: str, store: Store) -> bool:
     return True  # always
 
 
-def _render_dashboard(config: AppConfig, store: Store, out: str) -> None:
-    """Generate the dashboard HTML from state.db and write it to ``out``."""
-    html = dashboard.generate(config, store)
-    p = Path(out)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(html, encoding="utf-8")
+def _render_dashboard(config: AppConfig, store: Store, out_dir: str) -> list:
+    """Generate both pages from state.db and write them into ``out_dir``.
+    Returns the written file paths."""
+    pages = dashboard.render_pages(config, store)  # {filename: html}
+    d = Path(out_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    written = []
+    for fname, html in pages.items():
+        p = d / fname
+        p.write_text(html, encoding="utf-8")
+        written.append(str(p))
+    return written
 
 
-def build_dashboard(config: AppConfig, out: str = DASHBOARD_OUT) -> int:
+def build_dashboard(config: AppConfig, out_dir: str = DASHBOARD_DIR) -> int:
     """Standalone dashboard generation (CLI ``dashboard``) — offline, from state.db."""
     store = Store(config.db_path)
     try:
-        _render_dashboard(config, store, out)
+        written = _render_dashboard(config, store, out_dir)
     finally:
         store.close()
-    print(f"Dashboard written: {out}")
+    print("Dashboard written: " + ", ".join(written))
     return 0
 
 
@@ -117,8 +123,8 @@ def run(config: AppConfig, dry_run: bool = False) -> int:
         # regardless of Telegram success. A render bug must not fail the run.
         if not dry_run:
             try:
-                _render_dashboard(config, store, DASHBOARD_OUT)
-                log.info("dashboard written: %s", DASHBOARD_OUT)
+                _render_dashboard(config, store, DASHBOARD_DIR)
+                log.info("dashboard written: %s/{index,table}.html", DASHBOARD_DIR)
             except Exception as exc:
                 log.warning("dashboard generation failed: %s", exc)
 

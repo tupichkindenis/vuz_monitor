@@ -21,11 +21,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the message to stdout; do not send or persist state",
     )
-    dash = sub.add_parser("dashboard", help="regenerate the static HTML dashboard from state.db")
+    dash = sub.add_parser("dashboard", help="regenerate the static HTML dashboard (index.html + table.html) from state.db")
     dash.add_argument(
         "--out",
-        default=pipeline.DASHBOARD_OUT,
-        help=f"output HTML path (default: {pipeline.DASHBOARD_OUT})",
+        default=pipeline.DASHBOARD_DIR,
+        help=f"output directory for index.html + table.html (default: {pipeline.DASHBOARD_DIR})",
     )
     sub.add_parser("test-notify", help="send a test Telegram message")
     sub.add_parser("get-chat-id", help="print chat id(s) from recent bot updates")
@@ -70,7 +70,7 @@ def main(argv=None) -> int:
     if args.cmd == "run":
         return pipeline.run(cfg, dry_run=args.dry_run)
     if args.cmd == "dashboard":
-        return pipeline.build_dashboard(cfg, out=args.out)
+        return pipeline.build_dashboard(cfg, out_dir=args.out)
     if args.cmd == "test-notify":
         notify.send_message(
             cfg.telegram.bot_token,

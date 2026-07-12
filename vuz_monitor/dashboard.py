@@ -26,8 +26,9 @@ _SW, _SH, _SPAD = 120, 28, 3  # sparkline viewBox + padding
 # --------------------------------------------------------------------------- #
 # Generation from state.db
 # --------------------------------------------------------------------------- #
-def generate(config, store, now=None) -> str:
-    """Build the dashboard HTML from the latest snapshot of each watch."""
+def _gather(config, store):
+    """Load the latest snapshot per watch → (grouped reports, history dict).
+    Shared by both the card page and the table page (one state.db pass)."""
     reports = []
     history = {}  # (watch_id, code_display) -> [daily points]
     for w in config.watches:
@@ -49,7 +50,28 @@ def generate(config, store, now=None) -> str:
                 fetched_at=snap.fetched_at if snap else None,
             )
         )
-    return build_html(group_reports(reports), history, now=now)
+    return group_reports(reports), history
+
+
+def generate(config, store, now=None) -> str:
+    """The mobile card page (docs/index.html)."""
+    groups, history = _gather(config, store)
+    return build_html(groups, history, now=now)
+
+
+def generate_table(config, store, now=None) -> str:
+    """The desktop summary table (docs/table.html)."""
+    groups, history = _gather(config, store)
+    return build_table_html(groups, history, now=now)
+
+
+def render_pages(config, store, now=None) -> dict:
+    """Both pages from a single state.db pass: {filename: html}."""
+    groups, history = _gather(config, store)
+    return {
+        "index.html": build_html(groups, history, now=now),
+        "table.html": build_table_html(groups, history, now=now),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -278,6 +300,49 @@ def _group_section(name, reports, history, now, vuz, osnova) -> str:
     )
 
 
+_LINK_TABLE = '<a class="page-link" href="table.html">▦ таблица</a>'
+_LINK_CARDS = '<a class="page-link" href="index.html">☰ карточки</a>'
+
+
+def _summary(groups) -> dict:
+    """Global counts for the top bar (shared by both pages). «Проходной ВП: N/T»
+    counts only specialties that publish ВП flags, so МАИ/Станкин don't inflate T."""
+    flat = [r for _, reps in groups for r in reps]
+    all_codes = [cr for r in flat for cr in r.codes]
+    present = [cr.status for cr in all_codes if cr.status and cr.status.present]
+    flagged = [s for s in present if s.passing_real is not None]
+    codes = []
+    for cr in all_codes:
+        if cr.status is not None and cr.status.code_display not in codes:
+            codes.append(cr.status.code_display)
+    return {
+        "who": " / ".join(mask_code(c) for c in codes),
+        "n_real": sum(1 for s in flagged if s.passing_real),
+        "n_total": len(flagged),
+        "n_main": sum(1 for s in flagged if s.passing_main),
+        "n_consent": sum(1 for s in present if s.consent),
+        "updated": _updated_label(flat),
+        "fetched": [r.fetched_at for r in flat if r.fetched_at],
+    }
+
+
+def _summary_bar(groups, now, link_html: str = "") -> str:
+    s = _summary(groups)
+    age = _age_hours(max(s["fetched"]), now) if s["fetched"] else None
+    stale = (
+        f' · <span class="stale">данные устарели ({int(age)} ч)</span>'
+        if age is not None and age > STALE_HOURS else ""
+    )
+    who = f'<span class="who">{esc(s["who"])}</span> · ' if s["who"] else ""
+    link = f' · {link_html}' if link_html else ""
+    return (
+        '<div class="summary">' + who
+        + f'<b>Проходной ВП: {s["n_real"]}/{s["n_total"]}</b> · Основной ВП: {s["n_main"]} · '
+        f'согласий: {s["n_consent"]} · обновлено {esc(s["updated"])}{stale}{link}'
+        "</div>"
+    )
+
+
 def build_html(groups, history, now=None) -> str:
     """Render the full page. `groups` = group_reports() output; `history` =
     {(watch_id, code_display): [daily points]}."""
@@ -285,31 +350,6 @@ def build_html(groups, history, now=None) -> str:
         now = datetime.now(timezone.utc)
     elif now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-
-    flat = [r for _, reps in groups for r in reps]
-    all_codes = [cr for r in flat for cr in r.codes]
-    present = [cr.status for cr in all_codes if cr.status and cr.status.present]
-    # «Проходной ВП: N/T» counts only specialties that publish ВП flags — sources
-    # without them (МАИ) would otherwise inflate the denominator with rows that
-    # can never «pass».
-    flagged = [s for s in present if s.passing_real is not None]
-    n_total = len(flagged)
-    n_real = sum(1 for s in flagged if s.passing_real)
-    n_main = sum(1 for s in flagged if s.passing_main)
-    n_consent = sum(1 for s in present if s.consent)
-    updated = _updated_label(flat)
-
-    codes = []
-    for cr in all_codes:
-        if cr.status is not None and cr.status.code_display not in codes:
-            codes.append(cr.status.code_display)
-    who = " / ".join(mask_code(c) for c in codes)
-
-    fetched = [r.fetched_at for r in flat if r.fetched_at]
-    age = _age_hours(max(fetched), now) if fetched else None
-    summary_stale = ""
-    if age is not None and age > STALE_HOURS:
-        summary_stale = f' · <span class="stale">данные устарели ({int(age)} ч)</span>'
 
     # Axes for the ВУЗ / основа switchers (first-seen order for ВУЗ).
     vuz_order = []
@@ -338,11 +378,7 @@ def build_html(groups, history, now=None) -> str:
         "</head><body>\n"
         '<div class="wrap">\n'
         '<div class="topbar">'
-        '<div class="summary">'
-        + (f'<span class="who">{esc(who)}</span> · ' if who else "")
-        + f'<b>Проходной ВП: {n_real}/{n_total}</b> · Основной ВП: {n_main} · '
-        f'согласий: {n_consent} · обновлено {esc(updated)}{summary_stale}'
-        "</div>"
+        + _summary_bar(groups, now, _LINK_TABLE)
         + filters
         + "</div>\n"
         + _LEGEND + "\n"
@@ -371,6 +407,115 @@ def _filter_bar(vuz_order, osn_order) -> str:
         chips = _chip("__all__", "Все") + "".join(_chip(o, osn_labels.get(o, o)) for o in osn_order)
         rows += f'<div class="filter-row" data-dim="osnova"><span class="filter-lbl">Основа</span>{chips}</div>'
     return f'<div class="filters">{rows}</div>' if rows else ""
+
+
+# --------------------------------------------------------------------------- #
+# Desktop summary table (docs/table.html)
+# --------------------------------------------------------------------------- #
+def _num_td(v, disp=None) -> str:
+    """Right-aligned numeric cell with data-sort; None → «—» (sorts last)."""
+    if v is None:
+        return '<td class="num muted">—</td>'
+    return f'<td class="num" data-sort="{v}">{esc(disp if disp is not None else v)}</td>'
+
+
+def _delta_td(history, watch_id, disp) -> str:
+    """Day-over-day place change from history: ▲ improved / ▼ dropped."""
+    pts = history.get((watch_id, disp), []) if disp is not None else []
+    places = [p["place"] for p in pts if p["place"] is not None]
+    if len(places) < 2:
+        return '<td class="num muted"></td>'
+    d = places[-2] - places[-1]           # +ve = moved up (place decreased)
+    if d > 0:
+        return f'<td class="num up" data-sort="{d}">▲{d}</td>'
+    if d < 0:
+        return f'<td class="num down" data-sort="{d}">▼{-d}</td>'
+    return '<td class="num muted" data-sort="0">·</td>'
+
+
+_EMPTY6 = ('<td class="num muted">—</td><td class="num muted">—</td>'
+           '<td class="num muted">—</td><td class="muted">—</td>'
+           '<td class="muted">—</td><td class="muted">—</td>')
+
+
+def _table_row(report, vuz, osnova, history) -> str:
+    name = esc(report.name)
+    st = report.codes[0].status if report.codes else None
+    disp = st.code_display if st is not None else None
+    head = f'<td>{esc(vuz)}</td><td>{esc(osnova)}</td>'
+    name_td = f'<td class="name" title="{name}">{name}</td>'
+    tail = _delta_td(history, report.watch_id, disp) + (
+        f'<td class="upd">{esc(fmt_source_time(report.meta.updated_at) if report.meta else "—")}</td>'
+    )
+
+    if st is None:  # source never fetched
+        return (f'<tr class="nodata">{head}<td class="num muted">—</td>{name_td}'
+                f'<td class="muted">нет данных</td>{_EMPTY6}{tail}</tr>')
+
+    if not st.present or st.place is None:  # «выбыл»
+        return (f'<tr class="absent">{head}{_num_td(st.priority)}{name_td}'
+                f'<td class="muted" data-sort="">выбыл</td>{_EMPTY6}{tail}</tr>')
+
+    if st.passing_real is None and st.passing_main is None:   # no ВП flags (МАИ)
+        accent, preal = "neutral", '<span class="muted">—</span>'
+    elif st.passing_real:
+        accent, preal = "pass-real", f'<span class="ok">{esc(pass_real(True))}</span>'
+    elif st.passing_main:
+        accent, preal = "pass-main", esc(pass_real(st.passing_real))
+    else:
+        accent, preal = "neutral", esc(pass_real(st.passing_real))
+    pmain = "—" if st.passing_main is None else yesno(st.passing_main)
+
+    return (
+        f'<tr class="{accent}">{head}{_num_td(st.priority)}{name_td}'
+        + _num_td(st.place) + _num_td(st.total) + _num_td(st.plan)
+        + _num_td(st.final_score, disp=g(st.final_score))
+        + f'<td class="preal">{preal}</td>'
+        + f'<td>{esc(pmain)}</td><td>{esc(yesno(st.consent))}</td>'
+        + tail + "</tr>"
+    )
+
+
+_TABLE_HEADERS = [
+    ("ВУЗ", 0), ("Основа", 0), ("Приор", 1), ("Специальность", 0), ("Место", 1),
+    ("из", 1), ("Мест", 1), ("Балл", 1), ("Прох.ВП", 0), ("Осн.ВП", 0),
+    ("Согл/Дог", 0), ("Δ", 1), ("Обновлено", 0),
+]
+
+
+def build_table_html(groups, history, now=None) -> str:
+    """Desktop one-table view: row = specialty, columns = all params, sortable."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    rows = [
+        _table_row(r, *_group_axes(name), history)
+        for name, reps in groups for r in reps
+    ]
+    tbody = "".join(rows) or f'<tr><td colspan="{len(_TABLE_HEADERS)}" class="empty">Нет данных.</td></tr>'
+    thead = "".join(
+        f'<th{" data-num" if num else ""}>{esc(h)}</th>' for h, num in _TABLE_HEADERS
+    )
+    return (
+        "<!doctype html>\n"
+        '<html lang="ru"><head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="robots" content="noindex, nofollow">\n'
+        "<title>ВУЗ-мониторинг · таблица</title>\n"
+        f"<style>{_TABLE_STYLE}</style>\n"
+        "</head><body>\n"
+        '<div class="wrap-wide">\n'
+        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS) + "</div>\n"
+        '<div class="table-scroll"><table id="grid"><thead><tr>'
+        + thead + "</tr></thead><tbody>\n" + tbody + "\n</tbody></table></div>\n"
+        '<footer class="foot">обновляется каждый час · клик по заголовку — сортировка · vuz_monitor</footer>\n'
+        "</div>\n"
+        f"<script>{_TABLE_SCRIPT}</script>\n"
+        "</body></html>\n"
+    )
 
 
 # Collapsible legend explaining the ВП flags + pill colours (collapsed by default).
@@ -424,6 +569,7 @@ body {
 }
 .summary { font-size:13px; }
 .summary .who { color:var(--muted); font-variant-numeric:tabular-nums; }
+.page-link { color:var(--accent); text-decoration:none; font-weight:600; white-space:nowrap; }
 .filters { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
 .filter-row { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .filter-lbl { font-size:11px; color:var(--muted); min-width:42px; }
@@ -568,5 +714,110 @@ _SCRIPT = """
   setOffset();
   window.addEventListener('resize', setOffset);
   apply();
+})();
+"""
+
+
+_TABLE_STYLE = """
+* { box-sizing: border-box; }
+:root {
+  --bg:#f5f6f8; --card:#fff; --fg:#1a1d21; --muted:#6b7280; --border:#e5e7eb;
+  --green:#15803d; --amber:#b45309; --red:#b91c1c; --accent:#2563eb;
+  --row-green:rgba(34,197,94,.10); --row-amber:rgba(245,158,11,.12); --hover:rgba(127,127,127,.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0f1216; --card:#171b21; --fg:#e6e8eb; --muted:#9aa4b2; --border:#252b33;
+    --green:#4ade80; --amber:#fbbf24; --red:#f87171; --accent:#60a5fa;
+    --row-green:rgba(34,197,94,.13); --row-amber:rgba(245,158,11,.13); --hover:rgba(160,160,160,.12);
+  }
+}
+body {
+  margin:0; background:var(--bg); color:var(--fg);
+  font:13px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap-wide { max-width:1180px; margin:0 auto; padding:0 12px 40px; }
+.topbar {
+  position:sticky; top:0; z-index:5; margin:0 -12px 10px; padding:10px 12px;
+  background:var(--bg); border-bottom:1px solid var(--border);
+}
+.summary { font-size:13px; }
+.summary .who { color:var(--muted); font-variant-numeric:tabular-nums; }
+.stale { color:var(--red); }
+.page-link { color:var(--accent); text-decoration:none; font-weight:600; white-space:nowrap; }
+.table-scroll { overflow-x:auto; }
+#grid { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+#grid th, #grid td { padding:5px 8px; text-align:left; border-bottom:1px solid var(--border); white-space:nowrap; }
+#grid thead th {
+  position:sticky; top:48px; z-index:4; background:var(--bg); cursor:pointer;
+  user-select:none; font-weight:600; color:var(--muted); border-bottom:2px solid var(--border);
+}
+#grid thead th:hover { color:var(--fg); }
+#grid thead th[aria-sort="ascending"]::after { content:" ▲"; }
+#grid thead th[aria-sort="descending"]::after { content:" ▼"; }
+#grid td.num { text-align:right; }
+#grid td.name { max-width:280px; overflow:hidden; text-overflow:ellipsis; }
+#grid .muted, #grid td.muted { color:var(--muted); }
+#grid td.upd { color:var(--muted); font-size:12px; }
+#grid td.preal .ok { color:var(--green); font-weight:600; }
+#grid td.up { color:var(--green); font-weight:600; }
+#grid td.down { color:var(--red); font-weight:600; }
+#grid tbody tr.pass-real { background:var(--row-green); }
+#grid tbody tr.pass-real td:first-child { box-shadow:inset 3px 0 var(--green); }
+#grid tbody tr.pass-main { background:var(--row-amber); }
+#grid tbody tr.pass-main td:first-child { box-shadow:inset 3px 0 var(--amber); }
+#grid tbody tr.absent, #grid tbody tr.nodata { opacity:.6; }
+#grid tbody tr:hover { background:var(--hover); }
+.foot { font-size:11px; color:var(--muted); text-align:center; margin-top:14px; }
+.empty { color:var(--muted); text-align:center; padding:16px; }
+"""
+
+
+# Click a header to sort the table. Numeric columns (data-num) sort by data-sort;
+# text columns by text; missing values always sort to the bottom. No JS → static.
+_TABLE_SCRIPT = """
+(function () {
+  var table = document.getElementById('grid');
+  if (!table || !table.tHead || !table.tBodies.length) return;
+  var tbody = table.tBodies[0];
+  var ths = table.tHead.rows[0].cells;
+
+  function val(row, idx, num) {
+    var td = row.cells[idx];
+    if (!td) return null;
+    if (num) {
+      var d = td.getAttribute('data-sort');
+      if (d === null || d === '') return null;
+      var n = parseFloat(d);
+      return isNaN(n) ? null : n;
+    }
+    var t = (td.textContent || '').trim().toLowerCase();
+    return t === '' || t === '—' ? null : t;
+  }
+
+  function sort(idx, num, asc) {
+    var rows = Array.prototype.slice.call(tbody.rows);
+    rows.sort(function (a, b) {
+      var va = val(a, idx, num), vb = val(b, idx, num);
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;        // missing always last
+      if (vb === null) return -1;
+      if (va < vb) return asc ? -1 : 1;
+      if (va > vb) return asc ? 1 : -1;
+      return 0;
+    });
+    rows.forEach(function (r) { tbody.appendChild(r); });
+  }
+
+  Array.prototype.forEach.call(ths, function (th, idx) {
+    var num = th.hasAttribute('data-num');
+    th.addEventListener('click', function () {
+      var asc = th.getAttribute('aria-sort') !== 'ascending';
+      Array.prototype.forEach.call(ths, function (t) { t.removeAttribute('aria-sort'); });
+      th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
+      sort(idx, num, asc);
+    });
+  });
 })();
 """

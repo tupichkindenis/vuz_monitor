@@ -70,6 +70,58 @@ def test_filter_switchers_present():
     assert "localStorage" in html                                        # JS enhancement present
 
 
+# --- desktop summary table -------------------------------------------------- #
+def test_table_row_per_specialty_sortable_masked():
+    reps = [
+        mk_report("Спец A", mk_status(place=12, priority=1, final_score=252.0), watch_id="w1"),
+        mk_report("Спец B", mk_status(place=5, priority=2, final_score=260.0), watch_id="w2"),
+    ]
+    html = dashboard.build_table_html(group_reports(reps), {}, now=NOW)
+    assert html.count('<tr class=') == 2          # one row per specialty (thead <tr> has no class)
+    assert '<table id="grid"' in html and "data-num" in html      # sortable numeric headers
+    assert 'data-sort="12"' in html and 'data-sort="5"' in html   # place values sortable
+    assert 'getElementById(\'grid\')' in html                     # sort script present
+    assert 'content="noindex' in html
+    assert "•••6129" in html and "1366129" not in html            # masked, no leak
+    assert 'href="index.html"' in html                            # cross-link back to cards
+
+
+def test_table_no_vp_flags_shows_dash():
+    html = dashboard.build_table_html(
+        group_reports([mk_report("МАИ", mk_status(passing_real=None, passing_main=None),
+                                 group="МАИ — бюджет")]), {}, now=NOW)
+    assert '<tr class="neutral">' in html
+    assert '<td class="preal"><span class="muted">—</span></td>' in html   # Прох.ВП «—»
+
+
+def test_table_absent_row():
+    st = mk_status(present=False, place=None, final_score=None, priority=None,
+                   passing_real=None, passing_main=None)
+    html = dashboard.build_table_html(group_reports([mk_report("Спец", st)]), {}, now=NOW)
+    assert '<tr class="absent">' in html and "выбыл" in html
+
+
+def test_cards_page_links_to_table():
+    html = _html([mk_report("Спец", mk_status())])
+    assert 'href="table.html"' in html            # cards → table cross-link
+
+
+def test_render_pages_returns_both():
+    store = Store(":memory:")
+    w = WatchConfig(name="Спец", adapter="mirea_api", url="http://x", group="МИРЭА — бюджет")
+    meta = ProgramMeta(title="Спец", plan=40, total=1000, updated_at="2026-07-11 06:00:00")
+    ent = Entrant(code="1366129", code_display="1366129", place=12, final_score=252.0,
+                  priority=1, consent=True, passing_main=True, passing_real=True)
+    store.save(Snapshot(watch_id=w.watch_id, meta=meta, entrants=[ent],
+                        fetched_at=datetime.now(timezone.utc).isoformat()))
+    cfg = AppConfig(telegram=TelegramConfig(chat_id="", bot_token=""),
+                    heartbeat="on_change_only", tracked_codes=["1366129"], watches=[w])
+    pages = dashboard.render_pages(cfg, store)
+    assert set(pages) == {"index.html", "table.html"}
+    assert 'id="grid"' in pages["table.html"] and "место 12 из 1000" in pages["index.html"]
+    store.close()
+
+
 def test_vp_legend_present():
     html = _html([mk_report("Спец", mk_status())])
     assert "Что такое ВП" in html          # collapsible legend
