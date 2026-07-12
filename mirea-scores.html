@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>ВУЗ-мониторинг · подгрузка баллов</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1a1d21;--muted:#6b7280;--border:#e5e7eb;--green:#15803d;--red:#b91c1c;--accent:#2563eb;--you:#fef9c3;}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--fg:#e6e8eb;--muted:#9aa4b2;--border:#252b33;--green:#4ade80;--red:#f87171;--accent:#60a5fa;--you:#3f3a12;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);line-height:1.4;font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:760px;margin:0 auto;padding:12px;}
+.topbar{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--border);padding:8px 0;margin-bottom:12px;z-index:5;}
+.summary{font-size:14px;}
+.page-link{color:var(--accent);text-decoration:none;margin-left:8px;font-size:13px;}
+.score-sec{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px;}
+.score-sec h2{font-size:16px;margin:0 0 2px;}
+.score-sec h3{font-size:13px;color:var(--muted);margin:16px 0 6px;font-weight:600;}
+.caption{font-size:12px;color:var(--muted);margin-bottom:10px;}
+.yournum{font-size:14px;background:var(--you);border-radius:8px;padding:8px 10px;margin-bottom:12px;}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;}
+.cmp-scroll,.ranges-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.cmp,.ranges{font-size:13px;}
+.cmp th,.ranges th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;border-bottom:1px solid var(--border);padding:5px 6px;white-space:nowrap;}
+.cmp td,.ranges td{padding:5px 6px;border-bottom:1px solid var(--border);white-space:nowrap;}
+.num{text-align:right;}
+.cmp th.num,.ranges th.num{text-align:right;}
+.ts{font-weight:400;color:var(--muted);font-size:10px;}
+tr.you{background:var(--you);}
+.delta.good{color:var(--green);}
+.delta.bad{color:var(--red);}
+.delta.muted,.muted{color:var(--muted);}
+.trend{display:flex;align-items:center;gap:8px;margin-top:12px;}
+.trend-cap{font-size:11px;color:var(--muted);}
+.spark-svg{width:120px;height:28px;}
+.spark-place polyline{stroke:var(--accent);stroke-width:1.6;fill:none;stroke-linejoin:round;stroke-linecap:round;}
+.spark-place circle{fill:var(--accent);}
+.spark-dash{color:var(--muted);font-size:12px;}
+.foot{font-size:11px;color:var(--muted);text-align:center;margin-top:16px;}
+.empty{color:var(--muted);}
+</style>
+</head><body>
+<div class="wrap">
+<div class="topbar"><div class="summary"><b>Подгрузка баллов испытаний</b> · <a class="page-link" href="index.html">☰ карточки</a> <a class="page-link" href="table.html">▦ таблица</a> <a class="page-link" href="status.html">🚦 светофор</a> <a class="page-link" href="mirea-applications.html">📈 заявки</a> <a class="page-link" href="mirea-list.html">👥 окружение</a> <a class="page-link" href="mirea-forecast.html">🎯 прогноз</a></div></div>
+<section class="score-sec"><h2>Интеллектуальные системы управления и обработки информации / очная форма, СОО или СПО, ИИИ / общий</h2><div class="caption">по данным одного конкурса (не по всей МИРЭА)</div><div class="yournum">Ваш номер <b>•••6129</b>: место 2652 из 6 703 — <b>балл подгружен ✅</b></div><div class="cmp-scroll"><table class="cmp"><thead><tr><th>Показатель</th><th class="num">конец вчера<br><span class="ts">23.07 23:00</span></th><th class="num">10:00<br><span class="ts">24.07 09:00</span></th><th class="num">14:00<br><span class="ts">24.07 13:00</span></th><th class="num">19:00<br><span class="ts">—</span></th><th class="num">Изменение</th></tr></thead><tbody><tr><td>Всего без баллов</td><td class="num">456</td><td class="num">456</td><td class="num">456</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>Всего заявок в списке</td><td class="num">6 703</td><td class="num">6 703</td><td class="num">6 703</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr></tbody></table></div><h3>Распределение по диапазонам номеров</h3><div class="ranges-scroll"><table class="ranges"><thead><tr><th>Диапазон номера</th><th class="num">Всего</th><th class="num">конец вчера</th><th class="num">10:00</th><th class="num">14:00</th><th class="num">19:00</th><th class="num">Изм</th></tr></thead><tbody><tr><td>800 000–899 999</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>900 000–999 999</td><td class="num">110</td><td class="num">8</td><td class="num">8</td><td class="num">8</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>1 000 000–1 099 999</td><td class="num">140</td><td class="num">13</td><td class="num">13</td><td class="num">13</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>1 100 000–1 199 999</td><td class="num">352</td><td class="num">17</td><td class="num">17</td><td class="num">17</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>1 200 000–1 299 999</td><td class="num">546</td><td class="num">11</td><td class="num">11</td><td class="num">11</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr class="you"><td>1 300 000–1 399 999 ◄ ваш</td><td class="num">502</td><td class="num">20</td><td class="num">20</td><td class="num">20</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>1 400 000–1 499 999</td><td class="num">493</td><td class="num">23</td><td class="num">23</td><td class="num">23</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>1 500 000–1 599 999</td><td class="num">515</td><td class="num">27</td><td class="num">27</td><td class="num">27</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>1 600 000–1 699 999</td><td class="num">634</td><td class="num">31</td><td class="num">31</td><td class="num">31</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>1 700 000–1 799 999</td><td class="num">549</td><td class="num">28</td><td class="num">28</td><td class="num">28</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>1 800 000–1 899 999</td><td class="num">372</td><td class="num">20</td><td class="num">20</td><td class="num">20</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>1 900 000–1 999 999</td><td class="num">592</td><td class="num">34</td><td class="num">34</td><td class="num">34</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>2 000 000–2 099 999</td><td class="num">386</td><td class="num">22</td><td class="num">22</td><td class="num">22</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>2 100 000–2 199 999</td><td class="num">397</td><td class="num">30</td><td class="num">30</td><td class="num">30</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>2 200 000–2 299 999</td><td class="num">751</td><td class="num">59</td><td class="num">59</td><td class="num">59</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr><tr><td>2 300 000–2 399 999</td><td class="num">359</td><td class="num">113</td><td class="num">113</td><td class="num">113</td><td class="num">—</td><td class="num"><span class="delta muted">0</span></td></tr></tbody></table></div><div class="trend"><span class="trend-cap">тренд «без баллов»</span><svg class="spark-svg spark-place" viewBox="0 0 120 28" aria-hidden="true"><polyline points="3.0,10.5 11.8,10.5 20.5,18.9 29.3,7.1 38.1,7.2 46.8,8.7 55.6,18.7 64.4,3.0 73.2,3.0 81.9,25.0 90.7,3.8 99.5,17.2 108.2,5.5 117.0,5.5" fill="none" /><circle class="spark-end" cx="117.0" cy="5.5" r="2.2" /></svg></div></section>
+<footer class="foot">обновляется каждый час · vuz_monitor</footer>
+</div>
+</body></html>

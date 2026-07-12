@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>ВУЗ-мониторинг · МЭИ — очередь «Высший проходной»</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1a1d21;--muted:#6b7280;--border:#e5e7eb;--green:#15803d;--red:#dc2626;--accent:#2563eb;--accent-soft:#dbeafe;--green-bg:#dcfce7;--red-bg:#fee2e2;}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--fg:#e6e8eb;--muted:#9aa4b2;--border:#252b33;--green:#4ade80;--red:#f87171;--accent:#60a5fa;--accent-soft:#17253f;--green-bg:#0f2c1b;--red-bg:#3b1418;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);line-height:1.4;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:900px;margin:0 auto;padding:12px;}
+.topbar{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--border);padding:8px 0;margin-bottom:12px;z-index:5;}
+.summary{font-size:14px;}
+.page-link{color:var(--accent);text-decoration:none;margin-left:8px;font-size:13px;}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;}
+.tile{background:var(--card);border:1px solid var(--border);border-left-width:3px;border-radius:10px;padding:11px 13px;display:flex;flex-direction:column;gap:3px;}
+.tile.g{border-left-color:var(--green);} .tile.r{border-left-color:var(--red);} .tile.b{border-left-color:var(--accent);}
+.tile b{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums;}
+.tile span{font-size:12px;color:var(--muted);}
+.note{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:12px 14px;font-size:13px;color:var(--muted);margin-bottom:14px;}
+.note b{color:var(--fg);}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:10px;background:var(--card);}
+table{border-collapse:collapse;width:100%;min-width:680px;font-size:13px;font-variant-numeric:tabular-nums;}
+thead th{text-align:left;padding:10px 11px;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);font-weight:650;border-bottom:1px solid var(--border);vertical-align:bottom;white-space:nowrap;}
+th.r,td.r{text-align:right;} th.c,td.c{text-align:center;}
+tbody td{padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:middle;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr.me{background:var(--accent-soft);}
+.pr{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:21px;border-radius:6px;font-weight:700;font-size:12px;background:var(--border);color:var(--fg);}
+.pr.p1{background:var(--accent);color:#fff;}
+.prog{font-weight:600;font-size:12.5px;}
+.okso{font-size:10px;font-weight:700;color:var(--muted);background:var(--border);border-radius:4px;padding:1px 5px;margin-left:6px;font-variant-numeric:tabular-nums;}
+.refh{font-size:15px;font-weight:650;margin:26px 0 4px;}
+.refc{font-size:12.5px;color:var(--muted);margin:0 0 10px;}
+.refc b{color:var(--fg);}
+.mbar{position:relative;height:4px;border-radius:2px;background:var(--border);margin-top:4px;overflow:hidden;max-width:280px;}
+.mbar i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;}
+.mut{color:var(--muted);}
+.d.pos{color:var(--green);} .d.neg{color:var(--red);}
+.fc{font-weight:650;}
+.v{font-weight:600;font-size:12px;white-space:nowrap;}
+.v.now{color:var(--green);} .v.no{color:var(--red);} .v.me{color:var(--accent);}
+.foot{color:var(--muted);font-size:12px;text-align:center;margin:18px 0 6px;}
+
+.sech{font-size:15px;font-weight:650;margin:22px 0 4px;}
+.sech:first-of-type{margin-top:4px;}
+.secc{font-size:12.5px;color:var(--muted);margin:0 0 10px;}
+.secc b{color:var(--fg);}
+.small{font-size:11.5px;color:var(--muted);white-space:nowrap;}
+</style>
+</head><body>
+<div class="wrap">
+<div class="topbar"><div class="summary"><b>МЭИ · очередь «Высший проходной»</b> · <a class="page-link" href="index.html">☰ карточки</a> <a class="page-link" href="table.html">▦ таблица</a> <a class="page-link" href="mirea-scores.html">📊 баллы</a> <a class="page-link" href="mirea-list.html">👥 окружение</a> <a class="page-link" href="mirea-forecast.html">🎯 прогноз</a></div></div>
+<div class="tiles"><div class="tile b"><b>259</b><span>мой балл</span></div><div class="tile g"><b>0 из 3</b><span>бюджет: прохожу сейчас (ВП=ДА)</span></div><div class="tile r"><b>0 из 3</b><span>платно: прохожу сейчас (ВП=ДА)</span></div></div>
+<div class="note">Флаг <b>«Высший проходной = ДА»</b> в МЭИ ставят только тем, кто подал <b>согласие</b> (на платном — <b>договор и оплату</b>) <b>и</b> реально проходит сюда по своему приоритету. Одного балла мало: почти все, кто выше по общему списку, проходят где-то ещё по более высокому приоритету и в очередь ВП=ДА не попадают. <b>«Место среди ВП=ДА»</b> — где я встал бы в этой очереди по баллу, подай я согласие/оплату (число стоящих выше меня «ДА», +1).</div>
+<h2 class="sech">Бюджет</h2><p class="secc">Мой балл <b>259</b>. Сейчас прохожу (ВП=ДА) в <b>0 из 3</b> бюджетных направлений.</p><div class="scroll"><table><thead><tr><th>Направление</th><th class="r">Моё<br>место</th><th class="r">ВП=ДА<br>впереди</th><th class="c">Место среди<br>ВП=ДА</th><th class="r">Всего<br>ВП=ДА</th><th class="r">Мест</th><th>Согласие</th><th>Вердикт</th></tr></thead><tbody>
+<tr class=""><td><div class="prog">1. Управление в технических системах (ИВТИ)</div><div class="mbar"><i style="width:12%;background:var(--green)"></i></div></td><td class="r">1071<span class="mut">/3323</span></td><td class="r">7</td><td class="c"><span class="fc">8</span></td><td class="r mut">34</td><td class="r">67</td><td class="small">согласие: нет</td><td><span class="v now">при согласии → №8</span></td></tr><tr class=""><td><div class="prog">2. Информационные системы и технологии (ИЭВТ)</div><div class="mbar"><i style="width:16%;background:var(--green)"></i></div></td><td class="r">1617<span class="mut">/4201</span></td><td class="r">7</td><td class="c"><span class="fc">8</span></td><td class="r mut">18</td><td class="r">50</td><td class="small">согласие: нет</td><td><span class="v now">при согласии → №8</span></td></tr><tr class=""><td><div class="prog">3. Информатика и вычислительная техника (ИВТИ, ИРЭ)</div><div class="mbar"><i style="width:15%;background:var(--green)"></i></div></td><td class="r">2183<span class="mut">/6047</span></td><td class="r">30</td><td class="c"><span class="fc">31</span></td><td class="r mut">85</td><td class="r">201</td><td class="small">согласие: нет</td><td><span class="v now">при согласии → №31</span></td></tr></tbody></table></div>
+<h2 class="sech">Платно</h2><p class="secc">Сейчас прохожу (ВП=ДА) в <b>0 из 3</b>; оплату почти никто ещё не внёс — очередь ВП=ДА пустая, поэтому ранняя оплата ставит в самое начало.</p><div class="scroll"><table><thead><tr><th>Направление</th><th class="r">Моё<br>место</th><th class="r">ВП=ДА<br>впереди</th><th class="c">Место среди<br>ВП=ДА</th><th class="r">Всего<br>ВП=ДА</th><th class="r">Мест</th><th>Договор · оплата</th><th>Вердикт</th></tr></thead><tbody>
+<tr class=""><td><div class="prog">1. Управление в технических системах (ИВТИ)</div><div class="mbar"><i style="width:10%;background:var(--green)"></i></div></td><td class="r">132<span class="mut">/964</span></td><td class="r">0</td><td class="c"><span class="fc">1</span></td><td class="r mut">0</td><td class="r">10</td><td class="small">договор: да · оплата: нет</td><td><span class="v now">при оплате → №1</span></td></tr><tr class=""><td><div class="prog">2. Информационные системы и технологии (ИЭВТ)</div><div class="mbar"><i style="width:6%;background:var(--green)"></i></div></td><td class="r">238<span class="mut">/1568</span></td><td class="r">0</td><td class="c"><span class="fc">1</span></td><td class="r mut">0</td><td class="r">25</td><td class="small">договор: да · оплата: нет</td><td><span class="v now">при оплате → №1</span></td></tr><tr class=""><td><div class="prog">3. Информатика и вычислительная техника (ИВТИ, ИРЭ)</div><div class="mbar"><i style="width:6%;background:var(--green)"></i></div></td><td class="r">390<span class="mut">/2591</span></td><td class="r">0</td><td class="c"><span class="fc">1</span></td><td class="r mut">0</td><td class="r">59</td><td class="small">договор: да · оплата: нет</td><td><span class="v now">при оплате → №1</span></td></tr></tbody></table></div>
+<footer class="foot">обновляется каждый час · конкурсные списки МЭИ · vuz_monitor</footer>
+</div>
+</body></html>
