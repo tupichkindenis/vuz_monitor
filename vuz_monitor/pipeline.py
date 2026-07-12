@@ -3,18 +3,20 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from pathlib import Path
 
-from . import notify
+from . import dashboard, notify
 from .adapters import get_adapter
 from .config import AppConfig, WatchConfig
 from .diff import compute_changes, compute_status
 from .models import ProgramMeta
-from .report import CodeReport, WatchReport
+from .report import CodeReport, WatchReport, group_reports
 from .store import Store
 
 log = logging.getLogger("vuz_monitor")
 
 HEARTBEAT_META_KEY = "last_heartbeat_date"
+DASHBOARD_OUT = "docs/index.html"
 
 
 def _process_watch(
@@ -42,6 +44,16 @@ def _process_watch(
         code_reports.append(
             CodeReport(status=new_status, changes=changes, first_run=prev is None)
         )
+        if not dry_run and new_status is not None:
+            # Compact per-code point for the dashboard sparklines — every hour,
+            # independent of whether a Telegram message is sent. place=None when
+            # the code dropped out of the list («выбыл»).
+            store.append_history(
+                watch.watch_id, code, snap.fetched_at,
+                new_status.place, new_status.final_score,
+                new_status.passing_main, new_status.passing_real,
+                new_status.consent, new_status.contract,
+            )
 
     if not dry_run:
         store.save(snap)
@@ -73,35 +85,52 @@ def _should_send_group(reports: list, mode: str, store: Store) -> bool:
     return True  # always
 
 
-def _group_reports(reports: list) -> list:
-    """Bucket reports by group (ВУЗ + конкурс), preserving first-seen order."""
-    order = []
-    buckets = {}
-    for r in reports:
-        key = r.group or r.name
-        if key not in buckets:
-            buckets[key] = []
-            order.append(key)
-        buckets[key].append(r)
-    return [(k, buckets[k]) for k in order]
+def _render_dashboard(config: AppConfig, store: Store, out: str) -> None:
+    """Generate the dashboard HTML from state.db and write it to ``out``."""
+    html = dashboard.generate(config, store)
+    p = Path(out)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(html, encoding="utf-8")
+
+
+def build_dashboard(config: AppConfig, out: str = DASHBOARD_OUT) -> int:
+    """Standalone dashboard generation (CLI ``dashboard``) — offline, from state.db."""
+    store = Store(config.db_path)
+    try:
+        _render_dashboard(config, store, out)
+    finally:
+        store.close()
+    print(f"Dashboard written: {out}")
+    return 0
 
 
 def run(config: AppConfig, dry_run: bool = False) -> int:
     store = Store(config.db_path)
     try:
         reports = [_process_watch(w, config, store, dry_run) for w in config.watches]
+        if not reports:
+            print("(no watches configured)")
+            return 0
+
+        # Regenerate the dashboard every hour from state.db — BEFORE the send
+        # decision, so it stays fresh even under on_change_only (no message) and
+        # regardless of Telegram success. A render bug must not fail the run.
+        if not dry_run:
+            try:
+                _render_dashboard(config, store, DASHBOARD_OUT)
+                log.info("dashboard written: %s", DASHBOARD_OUT)
+            except Exception as exc:
+                log.warning("dashboard generation failed: %s", exc)
+
         mode = (config.heartbeat or "always").lower()
         # Decide per group; send the FULL group (all specialties) when any changed.
         groups = [
             (name, reps)
-            for name, reps in _group_reports(reports)
+            for name, reps in group_reports(reports)
             if _should_send_group(reps, mode, store)
         ]
         messages = notify.build_messages(groups)
 
-        if not reports:
-            print("(no watches configured)")
-            return 0
         if not messages:
             log.info("heartbeat=%s: nothing to send", config.heartbeat)
             if dry_run:

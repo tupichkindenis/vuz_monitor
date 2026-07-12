@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hourly run + dashboard publish. Install:
+       cp deploy/com.vuz-monitor.hourly.plist ~/Library/LaunchAgents/
+       launchctl bootout  gui/$(id -u) ~/Library/LaunchAgents/com.vuz-monitor.hourly.plist 2>/dev/null
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.vuz-monitor.hourly.plist -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.vuz-monitor.hourly</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/denis/VscodeProjects/vuz_monitor/deploy/run-and-publish.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/denis/VscodeProjects/vuz_monitor</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/denis/VscodeProjects/vuz_monitor/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/denis/VscodeProjects/vuz_monitor/launchd.log</string>
+</dict>
+</plist>

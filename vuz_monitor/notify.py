@@ -1,53 +1,20 @@
 """Message building + Telegram Bot API delivery (raw HTTPS, no extra dependency)."""
 from __future__ import annotations
 
-import html
-from datetime import datetime
-
 import httpx
+
+from .format import (
+    esc as _esc,
+    fmt_source_time as _fmt_source_time,
+    g as _g,
+    is_paid as _is_paid,
+    pass_real as _pass_real,
+    split_group as _split_group,
+    yesno as _yesno,
+)
 
 TG_LIMIT = 4096
 API = "https://api.telegram.org/bot{token}/{method}"
-
-
-# --------------------------------------------------------------------------- #
-# Formatting helpers
-# --------------------------------------------------------------------------- #
-def _esc(s) -> str:
-    return html.escape(str(s)) if s is not None else ""
-
-
-def _g(v) -> str:
-    """Compact number: 302.0 -> '302', 292.5 -> '292.5'."""
-    if v is None:
-        return "—"
-    return f"{v:g}"
-
-
-def _yesno(v) -> str:
-    if v is None:
-        return "нет данных"
-    return "да" if v else "нет"
-
-
-def _pass_real(v) -> str:
-    if v is None:
-        return "нет данных"
-    return "проходите" if v else "не проходите"
-
-
-def _split_group(name: str):
-    """'МИРЭА — бюджет' -> ('МИРЭА', 'бюджет'). Returns (None, None) if no separator."""
-    for sep in (" — ", " – ", " - "):
-        if sep in name:
-            vuz, konkurs = name.split(sep, 1)
-            return vuz.strip(), konkurs.strip()
-    return None, None
-
-
-def _is_paid(title) -> bool:
-    t = (title or "").lower()
-    return "договор" in t or "платн" in t
 
 
 # --------------------------------------------------------------------------- #
@@ -147,16 +114,6 @@ def _place_delta(cr) -> str:
             if ch.new > ch.old:
                 return f" (▼ {ch.new - ch.old})"
     return ""
-
-
-def _fmt_source_time(s) -> str:
-    """Source 'YYYY-MM-DD HH:MM:SS' -> 'DD.MM HH:MM'."""
-    if not s:
-        return "—"
-    try:
-        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").strftime("%d.%m %H:%M")
-    except (ValueError, TypeError):
-        return str(s)
 
 
 def _group_updated_at(reports):

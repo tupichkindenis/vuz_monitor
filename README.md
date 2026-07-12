@@ -13,8 +13,10 @@ heartbeat every hour **plus** a change summary when anything moves.
 config.yaml ─▶ pipeline ─▶ per watch:  adapter.fetch() → Snapshot (normalized)
                                         store.load_prev() → last hour
                                         diff.compute()   → what changed for your code
+                                        store.append_history() → compact per-code point
                                         notify.send()    → Telegram (status + diff)
                                         store.save()      → SQLite state
+                           end of run:  dashboard.generate() → docs/index.html
 ```
 
 It runs **once and exits**; a systemd timer (or cron) supplies the hourly cadence.
@@ -71,7 +73,47 @@ pre-wired as a reference.
 python -m vuz_monitor list-watches           # validate config
 python -m vuz_monitor run --dry-run          # print the message, don't send or save
 python -m vuz_monitor run                     # real cycle: fetch → diff → notify → save
+python -m vuz_monitor dashboard              # regenerate docs/index.html from state.db
+python -m vuz_monitor dashboard --out /tmp/d.html   # …to any path
 ```
+
+## Dashboard
+
+Every real `run` also writes a self-contained **`docs/index.html`** — one mobile-first page
+with all ВУЗ-ы / specialties / statuses and per-code **sparklines** (место — inverted axis,
+so an improving rank trends up; балл). It is regenerated from `state.db`, so `run` and the
+standalone `dashboard` command produce the identical page offline. Generation happens every
+hour **independent of** the `on_change_only` filter and of Telegram success (a render bug is
+logged, never fails the run); `--dry-run` writes nothing.
+
+History comes from a compact `code_history` table (one tiny row per code per run, pruned to
+120 days), downsampled to one point per Europe/Moscow day. A code that drops out of a list
+renders as «выбыл» (its history keeps a gap); a fresh install shows «копим историю» until a
+few days of points accumulate. Open `docs/index.html` in any browser. The код участника is
+**masked** on the page (`•••6129`) and the page carries `noindex`.
+
+### Publish to GitHub Pages
+
+The page is force-pushed to a **`gh-pages`** branch as a single commit (the branch never grows
+an hourly history), then served by GitHub Pages. Credentials for the unattended launchd job are
+a fine-grained PAT (`contents: read+write` on this repo) stored in a gitignored **`.gh-token`**
+(`chmod 600`); it reaches git via `GIT_ASKPASS`, so the token is never in the remote URL, `ps`,
+or logs. All publish state is gitignored: `.gh-token`, `.gh-pages-wt/`, `.publish.lock`.
+
+```bash
+# one-time
+gh auth login                                   # authenticate the gh CLI (interactive)
+gh repo create <user>/vuz_monitor --public --source=. --remote=origin --push
+printf '%s' '<PAT>' > .gh-token && chmod 600 .gh-token
+deploy/publish-dashboard.sh bootstrap           # create the orphan gh-pages branch + first push
+gh api -X POST repos/<user>/vuz_monitor/pages -f 'source[branch]=gh-pages' -f 'source[path]=/'
+
+# hourly (wired into launchd): run, then publish — publish failure never fails the run
+deploy/run-and-publish.sh
+```
+
+The launchd agent (`deploy/com.vuz-monitor.hourly.plist`) runs `deploy/run-and-publish.sh`
+(`run` then `publish`, sequential — **not** `&&`). URL: `https://<user>.github.io/vuz_monitor/`.
 
 ## Deploy (always-on VPS)
 

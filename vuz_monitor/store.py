@@ -7,11 +7,19 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from .models import Snapshot, snapshot_from_dict, snapshot_to_dict
 
-HISTORY_PER_WATCH = 48  # keep ~2 days of hourly snapshots
+HISTORY_PER_WATCH = 48         # snapshots: keep ~2 days of hourly full snapshots
+HISTORY_RETENTION_DAYS = 120   # code_history: keep ~4 months of compact per-code points
+MSK = ZoneInfo("Europe/Moscow")
+
+
+def _to_int_bool(v) -> Optional[int]:
+    return None if v is None else int(bool(v))
 
 
 class Store:
@@ -32,6 +40,24 @@ class Store:
         )
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        # Compact per-code time series for dashboard sparklines. One tiny row per
+        # (watch, code) per run; place/final_score nullable (NULL = «выбыл»).
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS code_history (
+                   watch_id     TEXT NOT NULL,
+                   code         TEXT NOT NULL,
+                   ts           TEXT NOT NULL,   -- UTC ISO
+                   place        INTEGER,
+                   final_score  REAL,
+                   passing_main INTEGER,
+                   passing_real INTEGER,
+                   consent      INTEGER,
+                   contract     INTEGER
+               )"""
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hist ON code_history(watch_id, code, ts)"
         )
         self.conn.commit()
 
@@ -80,6 +106,60 @@ class Store:
             (key, value),
         )
         self.conn.commit()
+
+    # --- code_history (dashboard sparklines) --- #
+    def append_history(
+        self, watch_id, code, ts, place, final_score,
+        passing_main, passing_real, consent, contract,
+    ) -> None:
+        """Append one observation. `place`/`final_score` may be None («выбыл»)."""
+        self.conn.execute(
+            "INSERT INTO code_history (watch_id, code, ts, place, final_score, "
+            "passing_main, passing_real, consent, contract) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                watch_id, code, ts,
+                (int(place) if place is not None else None),
+                (float(final_score) if final_score is not None else None),
+                _to_int_bool(passing_main), _to_int_bool(passing_real),
+                _to_int_bool(consent), _to_int_bool(contract),
+            ),
+        )
+        self._prune_history(watch_id, code)
+        self.conn.commit()
+
+    def _prune_history(self, watch_id, code, days: int = HISTORY_RETENTION_DAYS) -> None:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        self.conn.execute(
+            "DELETE FROM code_history WHERE watch_id=? AND code=? AND ts < ?",
+            (watch_id, code, cutoff),
+        )
+
+    def load_history(self, watch_id, code, days: int = HISTORY_RETENTION_DAYS) -> list:
+        """Daily-downsampled points for a code, oldest first. One point per MSK day
+        (the day's last observation). Each point: {day, place, final_score,
+        passing_real, passing_main, consent, contract}."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        rows = self.conn.execute(
+            "SELECT ts, place, final_score, passing_main, passing_real, consent, contract "
+            "FROM code_history WHERE watch_id=? AND code=? AND ts >= ? ORDER BY ts ASC",
+            (watch_id, code, cutoff),
+        ).fetchall()
+        by_day = {}  # msk_day -> point (last row of that day wins, rows are ts-ASC)
+        for ts, place, score, pmain, preal, consent, contract in rows:
+            try:
+                day = datetime.fromisoformat(ts).astimezone(MSK).date().isoformat()
+            except (ValueError, TypeError):
+                continue
+            by_day[day] = {
+                "day": day,
+                "place": place,
+                "final_score": score,
+                "passing_main": None if pmain is None else bool(pmain),
+                "passing_real": None if preal is None else bool(preal),
+                "consent": None if consent is None else bool(consent),
+                "contract": None if contract is None else bool(contract),
+            }
+        return [by_day[d] for d in sorted(by_day)]
 
     def close(self) -> None:
         self.conn.close()

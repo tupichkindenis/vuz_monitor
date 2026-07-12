@@ -6,6 +6,14 @@ config.yaml
 state.db
 *.db-journal
 
+# Generated dashboard (regenerated hourly from state.db; published to gh-pages)
+docs/
+
+# Dashboard publish (Phase 2): PAT, gh-pages worktree, lock — never commit these
+.gh-token
+.gh-pages-wt/
+.publish.lock
+
 # Python
 __pycache__/
 *.py[cod]
