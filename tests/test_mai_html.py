@@ -100,6 +100,19 @@ def test_parse_labeled_table_expands_colspan():
     assert rows[0][cols["priority"]] == "4"
 
 
+def test_header_matching_ignores_nbsp():
+    from bs4 import BeautifulSoup
+    html = ("<table><tr><th>№</th><th>Уникальный\xa0код</th><th>Сумма баллов</th></tr>"
+            "<tr><td>1</td><td>1366129</td><td>258</td></tr></table>")
+    soup = BeautifulSoup(html, "lxml")
+    tbl, _ = base.find_data_table(soup, pick="largest")
+    assert tbl is not None      # NBSP in «Уникальный код» must not break table discovery
+    cols, rows = base.parse_labeled_table(
+        tbl, [("code", "уникальный код"), ("final_score", "сумма баллов")]
+    )
+    assert cols.get("code") == 1 and rows[0][cols["code"]] == "1366129"
+
+
 def test_norm():
     assert _norm("Базовое\xa0высшее  образование") == "базовое высшее образование"
     assert _norm("Прикладная  математика") == "прикладная математика"

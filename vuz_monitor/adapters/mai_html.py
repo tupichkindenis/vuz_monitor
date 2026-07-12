@@ -82,6 +82,7 @@ class MaiHtmlAdapter(Adapter):
 
         # Walk the cascade by label. The root <select id="place"> lives on the
         # list page; every deeper step is an <option> fragment under /data/.
+        self._encoding = watch.encoding
         root = self._get(watch.url).text
         token = self._pick(root, p["place"], select_id="place", step="place")
         for step in ("level", "spec", "form", "pay"):
@@ -91,7 +92,8 @@ class MaiHtmlAdapter(Adapter):
 
     def _data(self, token: str) -> str:
         resp = self._get(self._data_url(token))
-        return resp.content.decode(resp.encoding or "utf-8", errors="replace")
+        enc = getattr(self, "_encoding", None) or resp.encoding or "utf-8"
+        return resp.content.decode(enc, errors="replace")
 
     @staticmethod
     def _data_url(value: str) -> str:
@@ -132,7 +134,10 @@ class MaiHtmlAdapter(Adapter):
 
         cols, rows = parse_labeled_table(table, _FIELD_KEYWORDS)
         code_idx = cols.get("code", 0)
-        paid = "contract" in cols  # «Договор» column = paid list
+        # Trust the watch's own основа (params.pay = «Платная») over sniffing the
+        # column; fall back to the «Договор» column if pay is unset.
+        pay = _norm((watch.params or {}).get("pay", ""))
+        paid = pay.startswith("платн") or "contract" in cols
 
         def cell(row, key):
             i = cols.get(key)
@@ -171,7 +176,9 @@ class MaiHtmlAdapter(Adapter):
             title=watch.name,
             plan=None,
             total=len(entrants),
-            updated_at=_parse_updated(html),
+            # parse from flattened text so tags/entities between the label and the
+            # timestamp don't defeat the regex
+            updated_at=_parse_updated(soup.get_text(" ")),
         )
         return Snapshot(
             watch_id=watch.watch_id, meta=meta, entrants=entrants, fetched_at=now_iso()

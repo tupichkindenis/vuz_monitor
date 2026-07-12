@@ -79,6 +79,12 @@ def truthy(v) -> bool:
 # Columns are matched by HEADER LABEL, so budget/paid column differences don't
 # break the mapping. colspan is expanded so header and data indices stay aligned.
 # --------------------------------------------------------------------------- #
+def _clean(s) -> str:
+    """Normalize a header/label cell for matching: NBSP → space, collapse
+    whitespace, lowercase. Keeps header matching robust to МАИ-style «Уникальный\xa0код»."""
+    return " ".join(str(s or "").replace("\xa0", " ").split()).lower()
+
+
 def table_rows(table) -> list:
     """Table as a list of rows (each a list of cell texts), expanding colspan."""
     out = []
@@ -92,7 +98,7 @@ def table_rows(table) -> list:
 
 
 def has_code_header(row, key: str = "уникальный код") -> bool:
-    return any(key in c.lower() for c in row)
+    return any(key in _clean(c) for c in row)
 
 
 def build_colmap(header: list, field_keywords: list) -> dict:
@@ -101,7 +107,7 @@ def build_colmap(header: list, field_keywords: list) -> dict:
     substring) wins per field, so order keywords specific-first."""
     cols = {}
     for idx, raw in enumerate(header):
-        c = raw.strip().lower()
+        c = _clean(raw)
         if "place" not in cols and c.startswith("№"):
             cols["place"] = idx
         for field, kw in field_keywords:
