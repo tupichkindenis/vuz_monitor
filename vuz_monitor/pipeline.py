@@ -56,15 +56,21 @@ def _process_watch(
     )
 
 
-def _reports_to_send(reports: list, config: AppConfig, store: Store) -> list:
-    """Which lists to message this run (heartbeat decision is per-list now)."""
-    mode = (config.heartbeat or "always").lower()
+def _should_send_group(reports: list, mode: str, store: Store) -> bool:
+    """Whether to message a whole group (ВУЗ + конкурс) this run.
+
+    A group is sent when something in it actually changed — a tracked applicant's
+    standing moved, a list first appeared, or a source errored. If nothing changed
+    (data identical to last run) we stay silent, so no repeated hourly messages.
+    """
+    changed = any(r.has_changes for r in reports)
     if mode == "on_change_only":
-        return [r for r in reports if r.has_changes]
+        return changed
     if mode == "daily":
-        due = store.get_meta(HEARTBEAT_META_KEY) != date.today().isoformat()
-        return list(reports) if due else [r for r in reports if r.has_changes]
-    return list(reports)  # always
+        if changed:
+            return True
+        return store.get_meta(HEARTBEAT_META_KEY) != date.today().isoformat()
+    return True  # always
 
 
 def _group_reports(reports: list) -> list:
@@ -84,8 +90,13 @@ def run(config: AppConfig, dry_run: bool = False) -> int:
     store = Store(config.db_path)
     try:
         reports = [_process_watch(w, config, store, dry_run) for w in config.watches]
-        to_send = _reports_to_send(reports, config, store)
-        groups = _group_reports(to_send)            # one message per (ВУЗ + конкурс)
+        mode = (config.heartbeat or "always").lower()
+        # Decide per group; send the FULL group (all specialties) when any changed.
+        groups = [
+            (name, reps)
+            for name, reps in _group_reports(reports)
+            if _should_send_group(reps, mode, store)
+        ]
         messages = notify.build_messages(groups)
 
         if not reports:
@@ -103,7 +114,7 @@ def run(config: AppConfig, dry_run: bool = False) -> int:
 
         for msg in messages:
             notify.send_message(config.telegram.bot_token, config.telegram.chat_id, msg)
-        if (config.heartbeat or "").lower() == "daily":
+        if mode == "daily":
             store.set_meta(HEARTBEAT_META_KEY, date.today().isoformat())
         log.info("sent %d message(s)", len(messages))
         return 0

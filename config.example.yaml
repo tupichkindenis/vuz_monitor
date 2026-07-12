@@ -5,11 +5,13 @@
 telegram:
   chat_id: "123456789"        # your Telegram chat id (see: python -m vuz_monitor get-chat-id)
 
-# How often to send a message:
-#   always          - send every run (hourly heartbeat + diffs)   <- your choice
-#   on_change_only  - send only when something changed
-#   daily           - send on change, plus one heartbeat per day
-heartbeat: always
+# When to send a group message (per ВУЗ + бюджет/платно):
+#   on_change_only  - only when a tracked applicant's standing changed   <- recommended
+#   always          - every run (hourly), even if nothing changed
+#   daily           - on change, plus one heartbeat per day
+# «on_change_only» stays silent while the data is unchanged (no repeated hourly messages);
+# when something moves it sends the whole group so you see full context + the diff.
+heartbeat: on_change_only
 
 # Which field identifies you in the list. For mirea_api:
 #   superCode - код участника (default)   snils - СНИЛС   id - row id
