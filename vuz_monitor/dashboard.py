@@ -156,33 +156,42 @@ def _pill(text: str, cls: str) -> str:
     return f'<span class="pill {cls}">{esc(text)}</span>'
 
 
+def _head(name: str, pill_html: str, place_html: str = "") -> str:
+    """Card header: specialty name on its own full-width line, then место + pill
+    on a second line — stable regardless of how long the name wraps."""
+    return (
+        f'<div class="spec-name">{name}</div>'
+        f'<div class="status-line">{place_html}{pill_html}</div>'
+    )
+
+
 def _card(report, points) -> str:
     name = esc(report.name)
     paid = is_paid(report.title) or is_paid(report.group)
 
     if report.error:  # defensive; generate() never sets this (reads state.db)
         return (
-            f'<div class="card err"><div class="card-main"><span class="spec-name">{name}</span>'
-            f'{_pill("нет свежих данных", "muted")}</div>'
-            f'<div class="tertiary muted">⚠️ {esc(report.error)}</div></div>'
+            f'<div class="card err">'
+            + _head(name, _pill("нет свежих данных", "muted"))
+            + f'<div class="tertiary muted">⚠️ {esc(report.error)}</div></div>'
         )
 
     st = report.codes[0].status if report.codes else None
 
     if st is None:  # source never fetched successfully yet
         return (
-            f'<div class="card nodata"><div class="card-main"><span class="spec-name">{name}</span>'
-            f'{_pill("нет данных", "muted")}</div>'
-            f'<div class="tertiary muted">источник ещё не опрашивался</div>'
-            f"{_spark_row(points)}</div>"
+            f'<div class="card nodata">'
+            + _head(name, _pill("нет данных", "muted"))
+            + '<div class="tertiary muted">источник ещё не опрашивался</div>'
+            + _spark_row(points) + "</div>"
         )
 
     if not st.present or st.place is None:  # «выбыл»
         return (
-            f'<div class="card absent"><div class="card-main"><span class="spec-name">{name}</span>'
-            f'{_pill("выбыл", "muted")}</div>'
-            f'<div class="tertiary muted">выбыл из списка</div>'
-            f"{_spark_row(points)}</div>"
+            f'<div class="card absent">'
+            + _head(name, _pill("выбыл", "muted"))
+            + '<div class="tertiary muted">выбыл из списка</div>'
+            + _spark_row(points) + "</div>"
         )
 
     # present ----------------------------------------------------------------
@@ -214,14 +223,14 @@ def _card(report, points) -> str:
         consent_txt = f"Согласие: {yesno(st.consent)}"
 
     tertiary = f"Основной ВП: {yesno(st.passing_main)} · {esc(consent_txt)}"
+    place_html = f'<span class="place">{esc(place)}</span>'
 
     return (
         f'<div class="card {accent}">'
-        f'<div class="card-main"><span class="spec-name">{name}</span>'
-        f'<span class="place">{esc(place)}</span>{_pill(pass_real(st.passing_real), pill_cls)}</div>'
-        f'<div class="secondary">{secondary}</div>'
-        f'<div class="tertiary">{tertiary}</div>'
-        f"{_spark_row(points)}</div>"
+        + _head(name, _pill(pass_real(st.passing_real), pill_cls), place_html)
+        + f'<div class="secondary">{secondary}</div>'
+        + f'<div class="tertiary">{tertiary}</div>'
+        + _spark_row(points) + "</div>"
     )
 
 
@@ -406,8 +415,8 @@ body {
 .card.pass-main { border-left-color:var(--amber-bd); }
 .card.absent, .card.nodata, .card.err { opacity:.75; }
 .card.err { border-left-color:var(--red); }
-.card-main { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 8px; }
-.spec-name { font-size:15px; font-weight:600; flex:1 1 auto; }
+.spec-name { font-size:15px; font-weight:600; }
+.status-line { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin-top:5px; }
 .place { font-size:13px; color:var(--muted); }
 .pill {
   font-size:12px; font-weight:600; padding:2px 8px; border-radius:999px; white-space:nowrap;
