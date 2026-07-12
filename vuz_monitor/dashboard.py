@@ -192,12 +192,15 @@ def _card(report, points) -> str:
         )
 
     # present ----------------------------------------------------------------
-    if st.passing_real:
-        accent, pill_cls = "pass-real", "green"
+    if st.passing_real is None and st.passing_main is None:
+        # source publishes no ВП flags (e.g. МАИ) — neutral, not «не проходите»
+        accent, pill_cls, pill_text = "neutral", "grey", "—"
+    elif st.passing_real:
+        accent, pill_cls, pill_text = "pass-real", "green", pass_real(st.passing_real)
     elif st.passing_main:
-        accent, pill_cls = "pass-main", "amber"
+        accent, pill_cls, pill_text = "pass-main", "amber", pass_real(st.passing_real)
     else:
-        accent, pill_cls = "neutral", "grey"
+        accent, pill_cls, pill_text = "neutral", "grey", pass_real(st.passing_real)
 
     place = f"место {st.place}"
     if st.total is not None:
@@ -223,7 +226,7 @@ def _card(report, points) -> str:
 
     return (
         f'<div class="card {accent}">'
-        + _head(name, _pill(pass_real(st.passing_real), pill_cls))
+        + _head(name, _pill(pill_text, pill_cls))
         + f'<div class="place-line">{esc(place)}</div>'
         + f'<div class="secondary">{secondary}</div>'
         + f'<div class="tertiary">{tertiary}</div>'
@@ -248,11 +251,18 @@ def _group_section(name, reports, history, now, vuz, osnova) -> str:
     if age is not None and age > STALE_HOURS:
         stale = f'<span class="stale">⚠️ данные от {esc(_fetched_msk(max(fetched)))}</span>'
 
-    # count where the applicant currently passes (Проходной ВП) in this group
-    passing = sum(
-        1 for r in reports for cr in r.codes
-        if cr.status and cr.status.present and cr.status.passing_real
-    )
+    # «проходите: N/M» over specialties that publish ВП flags; groups without
+    # flags at all (МАИ) omit the counter rather than show a misleading «0/M».
+    flagged = [
+        cr.status for r in reports for cr in r.codes
+        if cr.status and cr.status.present and cr.status.passing_real is not None
+    ]
+    meta_parts = []
+    if flagged:
+        passing = sum(1 for s in flagged if s.passing_real)
+        meta_parts.append(f"проходите: {passing}/{len(flagged)}")
+    meta_parts.append(f"обновлено {esc(vuz_updated)}{stale}")
+
     cards = []
     for r in reports:
         disp = r.codes[0].status.code_display if (r.codes and r.codes[0].status) else None
@@ -262,7 +272,7 @@ def _group_section(name, reports, history, now, vuz, osnova) -> str:
     return (
         f'<section class="group" data-vuz="{esc(vuz)}" data-osnova="{esc(osnova)}">'
         f'<div class="group-header"><span class="group-title">{esc(name)}</span>'
-        f'<span class="group-meta">проходите: {passing}/{len(reports)} · обновлено {esc(vuz_updated)}{stale}</span></div>'
+        f'<span class="group-meta">{" · ".join(meta_parts)}</span></div>'
         + "".join(cards)
         + "</section>"
     )
@@ -279,9 +289,13 @@ def build_html(groups, history, now=None) -> str:
     flat = [r for _, reps in groups for r in reps]
     all_codes = [cr for r in flat for cr in r.codes]
     present = [cr.status for cr in all_codes if cr.status and cr.status.present]
-    n_total = len(all_codes)
-    n_real = sum(1 for s in present if s.passing_real)
-    n_main = sum(1 for s in present if s.passing_main)
+    # «Проходной ВП: N/T» counts only specialties that publish ВП flags — sources
+    # without them (МАИ) would otherwise inflate the denominator with rows that
+    # can never «pass».
+    flagged = [s for s in present if s.passing_real is not None]
+    n_total = len(flagged)
+    n_real = sum(1 for s in flagged if s.passing_real)
+    n_main = sum(1 for s in flagged if s.passing_main)
     n_consent = sum(1 for s in present if s.consent)
     updated = _updated_label(flat)
 
@@ -376,6 +390,9 @@ _LEGEND = (
     "согласие вовремя или конкуренты уберут своё — пограничное состояние.</span></div>"
     '<div class="legend-row"><span class="pill grey">не проходите</span>'
     "<span>Серый = оба флага «нет», пока не проходите.</span></div>"
+    '<div class="legend-row"><span class="pill grey">—</span>'
+    "<span>Прочерк = ВУЗ не публикует флаги ВП (напр. МАИ) — смотрите место, балл, "
+    "приоритет; «проходите/не проходите» не определить.</span></div>"
     "</div></details>"
 )
 

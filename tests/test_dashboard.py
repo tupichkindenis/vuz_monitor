@@ -84,6 +84,15 @@ def test_switchers_omitted_when_single_choice():
     assert 'data-dim="osnova"' not in html
 
 
+def test_no_vp_flags_render_neutral_not_fail():
+    # source without ВП flags (МАИ): passing_real & passing_main both None
+    st = mk_status(passing_real=None, passing_main=None)
+    html = _html([mk_report("МАИ спец", st, group="МАИ — бюджет")])
+    assert '<span class="pill grey">—</span>' in html   # neutral pill, not «не проходите»/«нет данных»
+    assert "Проходной ВП: 0/0" in html                  # no-flag specialty excluded from denominator
+    assert "проходите:" not in html                     # group header omits the misleading counter
+
+
 def test_amber_when_only_main_passes():
     html = _html([mk_report("Спец", mk_status(passing_real=False, passing_main=True))])
     assert "pass-main" in html

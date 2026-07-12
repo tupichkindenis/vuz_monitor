@@ -43,13 +43,16 @@ def _specialty_block(report, show_code: bool) -> str:
             if st.plan is not None:
                 place_line += f" (всего {st.plan} мест)"
             lines.append(place_line)
+            # Sources without official ВП flags (e.g. МАИ) leave both None — omit
+            # the «ВП прох./основ.» line instead of printing «нет данных · нет данных».
+            has_vp = not (st.passing_real is None and st.passing_main is None)
+            vp_line = f"– ВП прох./основ.: {_pass_real(st.passing_real)} · {_yesno(st.passing_main)}"
             if paid:
                 # ВП-флаги важны и на платном (сигнал прохождения) — показываем их тоже.
                 # «Соблюдены условия для платного» = accepted / наличие договора (у МЭИ
                 # = договор И оплата), с расшифровкой.
-                lines.append(
-                    f"– ВП прох./основ.: {_pass_real(st.passing_real)} · {_yesno(st.passing_main)}"
-                )
+                if has_vp:
+                    lines.append(vp_line)
                 line = f"– Соблюдены условия для платного: {_yesno(st.consent)}"
                 detail = []
                 if st.contract is not None:
@@ -60,9 +63,8 @@ def _specialty_block(report, show_code: bool) -> str:
                     line += f" ({', '.join(detail)})"
                 lines.append(line)
             else:
-                lines.append(
-                    f"– ВП прох./основ.: {_pass_real(st.passing_real)} · {_yesno(st.passing_main)}"
-                )
+                if has_vp:
+                    lines.append(vp_line)
                 lines.append(f"– Согласие: {_yesno(st.consent)}")
         # place shown inline; paid_ok (МИРЭА pc) unused. ВП/consent tracked on both.
         lines += _change_lines(cr, exclude={"place", "paid_ok"}, is_paid=paid)

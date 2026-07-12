@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from .base import Adapter
 from .html_table import HtmlTableAdapter
+from .mai_html import MaiHtmlAdapter
 from .mirea_api import MireaApiAdapter
 from .mpei_html import MpeiHtmlAdapter
 from .stankin_html import StankinHtmlAdapter
@@ -10,6 +11,7 @@ from .stankin_html import StankinHtmlAdapter
 _REGISTRY = {
     "mirea_api": MireaApiAdapter,
     "html_table": HtmlTableAdapter,
+    "mai_html": MaiHtmlAdapter,
     "mpei_html": MpeiHtmlAdapter,
     "stankin_html": StankinHtmlAdapter,
 }

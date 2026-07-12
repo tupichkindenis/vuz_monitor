@@ -54,6 +54,21 @@ watches:
       edu_level: 2
     codes: null
 
+  # --- МАИ (mai_html). The priem.mai.ru filter is a cascade of static HTML files;
+  #     the adapter walks it BY LABEL each run (tokens regenerate). Give the exact
+  #     option labels; no code_field (matched by the «Уникальный код» column). МАИ
+  #     publishes no ВП flags → the pill shows «—»; paid uses «Договор». ---
+  # - name: "1. Информатика и вычислительная техника"
+  #   group: "МАИ — бюджет"
+  #   adapter: mai_html
+  #   url: https://priem.mai.ru/list/
+  #   params:
+  #     place: МАИ
+  #     level: Базовое высшее образование
+  #     spec: Информатика и вычислительная техника
+  #     form: Очная
+  #     pay: Бюджет                # or "Платная" (group: "МАИ — платно")
+
   # --- Generic HTML table source. Map columns by 0-based cell index. ---
   # - name: "Пример ВУЗ — Прикладная информатика"
   #   adapter: html_table

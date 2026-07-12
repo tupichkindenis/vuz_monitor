@@ -40,6 +40,14 @@ Each data source is a small **adapter**. Four ship today:
   server-rendered grid at `/gridspisokpostupayushchikh/`; filtering by `PROPERTY_423=<код>`
   returns the applicant's row with their true rank. Columns mapped by header label; the
   watch's `params:` carries the filter (основа / направление / код / …).
+- `mai_html` — МАИ (`priem.mai.ru`). The filter is a cascade of **static HTML files**
+  (`public.mai.ru/priem/list/data/{token}.html`); the tokens embed a snapshot timestamp and
+  regenerate, so the adapter walks the cascade **by label** each run (`place → level → spec →
+  form → pay`, from the watch's `params:`). The terminal page has several tables — it takes the
+  largest one with a «Уникальный код» header (works for budget and paid). МАИ publishes **no ВП
+  flags** (the dashboard shows a neutral «—» pill) and **no КЦП**, but does publish «Дата
+  последнего обновления» → the update time. Budget uses «Согласие», paid uses «Договор».
+  Shares the label→index table parser (`base.parse_labeled_table`) with `stankin_html`.
 - `html_table` — a generic HTML `<table>` scraper; map columns by cell index in config.
   Covers most own-site ВУЗ pages without new code.
 
