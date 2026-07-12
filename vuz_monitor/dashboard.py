@@ -331,6 +331,7 @@ def build_html(groups, history, now=None) -> str:
         "</div>"
         + filters
         + "</div>\n"
+        + _LEGEND + "\n"
         '<p class="no-match" hidden>Нет списков под выбранный фильтр.</p>\n'
         f"{sections}\n"
         '<footer class="foot">обновляется каждый час · vuz_monitor</footer>\n'
@@ -356,6 +357,27 @@ def _filter_bar(vuz_order, osn_order) -> str:
         chips = _chip("__all__", "Все") + "".join(_chip(o, osn_labels.get(o, o)) for o in osn_order)
         rows += f'<div class="filter-row" data-dim="osnova"><span class="filter-lbl">Основа</span>{chips}</div>'
     return f'<div class="filters">{rows}</div>' if rows else ""
+
+
+# Collapsible legend explaining the ВП flags + pill colours (collapsed by default).
+_LEGEND = (
+    '<details class="legend">'
+    "<summary>Что такое ВП · обозначения</summary>"
+    '<div class="legend-body">'
+    "<p><b>ВП — высший приоритет:</b> проходите ли вы на направление с учётом ваших "
+    "приоритетов по всем программам сразу. Пилюля в правом углу карточки показывает "
+    "<b>Проходной ВП</b> (как сейчас), а строка «Основной ВП» — базовый расчёт.</p>"
+    '<div class="legend-row"><span class="pill green">проходите</span>'
+    "<span><b>Проходной ВП</b> — проходите прямо <b>сейчас</b>, по текущим согласиям "
+    "(кто уже принёс согласие на зачисление).</span></div>"
+    '<div class="legend-row"><span class="pill amber">не проходите</span>'
+    "<span>Янтарный = <b>Основной ВП «да», Проходной «нет»</b>: по баллам вы в пределах "
+    "мест, но впереди хватает людей с согласиями. Станете проходным, когда подадите "
+    "согласие вовремя или конкуренты уберут своё — пограничное состояние.</span></div>"
+    '<div class="legend-row"><span class="pill grey">не проходите</span>'
+    "<span>Серый = оба флага «нет», пока не проходите.</span></div>"
+    "</div></details>"
+)
 
 
 _STYLE = """
@@ -395,6 +417,18 @@ body {
 }
 .chip.active { background:var(--accent); border-color:var(--accent); color:#fff; }
 .no-match { color:var(--muted); font-size:14px; padding:16px 0; }
+.legend { margin:0 0 16px; border:1px solid var(--border); border-radius:8px; background:var(--card); }
+.legend > summary {
+  cursor:pointer; padding:9px 12px; font-size:13px; font-weight:600;
+  list-style:none; color:var(--muted);
+}
+.legend > summary::-webkit-details-marker { display:none; }
+.legend > summary::before { content:"ℹ️ "; }
+.legend[open] > summary { border-bottom:1px solid var(--border); }
+.legend-body { padding:10px 12px; font-size:13px; display:flex; flex-direction:column; gap:8px; }
+.legend-body p { margin:0; }
+.legend-row { display:flex; gap:8px; align-items:flex-start; }
+.legend-row .pill { margin-top:1px; }
 .stale { color:var(--red); }
 .group { margin-bottom:20px; }
 .group-header {

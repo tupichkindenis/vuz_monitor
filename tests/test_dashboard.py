@@ -70,6 +70,13 @@ def test_filter_switchers_present():
     assert "localStorage" in html                                        # JS enhancement present
 
 
+def test_vp_legend_present():
+    html = _html([mk_report("Спец", mk_status())])
+    assert "Что такое ВП" in html          # collapsible legend
+    assert "высший приоритет" in html
+    assert "Проходной ВП" in html and "Основной ВП" in html
+
+
 def test_switchers_omitted_when_single_choice():
     # one ВУЗ, one основа → no point offering a filter
     html = _html([mk_report("Только один", mk_status(), group="МИРЭА — бюджет")])
