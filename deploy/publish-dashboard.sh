@@ -54,12 +54,16 @@ esac
 EOF
 chmod 700 "$ASKPASS"
 export GIT_ASKPASS="$ASKPASS" GH_OWNER="$OWNER" GH_TOKEN_FILE="$TOKEN_FILE" GIT_TERMINAL_PROMPT=0
+# Disable any configured credential helper (e.g. osxkeychain) for THIS process only,
+# so git always uses our GIT_ASKPASS token instead of a stale keychain entry.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
 trap 'rm -f "$ASKPASS"' EXIT
 
 bootstrap_orphan() {
   log "bootstrapping orphan $BRANCH"
   rm -rf "$WT"
   git worktree prune
+  git branch -D "$BRANCH" >/dev/null 2>&1 || true  # drop any half-made local branch
   git worktree add --detach "$WT" >/dev/null 2>&1 || fail "worktree add (detach) failed"
   git -C "$WT" checkout --orphan "$BRANCH" >/dev/null 2>&1 || fail "orphan checkout failed"
   git -C "$WT" rm -rf . >/dev/null 2>&1 || true   # drop main's tree from index+disk
