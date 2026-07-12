@@ -212,8 +212,6 @@ def _card(report, points) -> str:
             consent_txt += f" ({', '.join(detail)})"
     else:
         consent_txt = f"Согласие: {yesno(st.consent)}"
-        if st.needs_dormitory is not None:
-            consent_txt += f" · Общежитие: {'требуется' if st.needs_dormitory else 'не требуется'}"
 
     tertiary = f"Основной ВП: {yesno(st.passing_main)} · {esc(consent_txt)}"
 

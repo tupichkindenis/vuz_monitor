@@ -64,10 +64,6 @@ def _specialty_block(report, show_code: bool) -> str:
                     f"– ВП прох./основ.: {_pass_real(st.passing_real)} · {_yesno(st.passing_main)}"
                 )
                 lines.append(f"– Согласие: {_yesno(st.consent)}")
-                if st.needs_dormitory is not None:
-                    lines.append(
-                        f"– Общежитие: {'требуется' if st.needs_dormitory else 'не требуется'}"
-                    )
         # place shown inline; paid_ok (МИРЭА pc) unused. ВП/consent tracked on both.
         lines += _change_lines(cr, exclude={"place", "paid_ok"}, is_paid=paid)
     return "\n".join(lines)
