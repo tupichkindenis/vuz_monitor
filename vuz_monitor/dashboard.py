@@ -438,22 +438,32 @@ _EMPTY6 = ('<td class="num muted">—</td><td class="num muted">—</td>'
            '<td class="muted">—</td><td class="muted">—</td>')
 
 
+def _spark_cell(points) -> str:
+    """Tiny place sparkline (inverted axis) from history, for the Тренд column."""
+    svg = _sparkline([p["place"] for p in points], higher_is_better=False, cls="spark-place")
+    return f'<td class="spark">{svg}</td>' if svg else '<td class="spark muted">—</td>'
+
+
 def _table_row(report, vuz, osnova, history) -> str:
     name = esc(report.name)
     st = report.codes[0].status if report.codes else None
     disp = st.code_display if st is not None else None
+    attrs = f' data-vuz="{esc(vuz)}" data-osnova="{esc(osnova)}"'
     head = f'<td>{esc(vuz)}</td><td>{esc(osnova)}</td>'
     name_td = f'<td class="name" title="{name}">{name}</td>'
-    tail = _delta_td(history, report.watch_id, disp) + (
-        f'<td class="upd">{esc(fmt_source_time(report.meta.updated_at) if report.meta else "—")}</td>'
+    pts = history.get((report.watch_id, disp), []) if disp is not None else []
+    tail = (
+        _delta_td(history, report.watch_id, disp)
+        + _spark_cell(pts)
+        + f'<td class="upd">{esc(fmt_source_time(report.meta.updated_at) if report.meta else "—")}</td>'
     )
 
     if st is None:  # source never fetched
-        return (f'<tr class="nodata">{head}<td class="num muted">—</td>{name_td}'
+        return (f'<tr class="nodata"{attrs}>{head}<td class="num muted">—</td>{name_td}'
                 f'<td class="muted">нет данных</td>{_EMPTY6}{tail}</tr>')
 
     if not st.present or st.place is None:  # «выбыл»
-        return (f'<tr class="absent">{head}{_num_td(st.priority)}{name_td}'
+        return (f'<tr class="absent"{attrs}>{head}{_num_td(st.priority)}{name_td}'
                 f'<td class="muted" data-sort="">выбыл</td>{_EMPTY6}{tail}</tr>')
 
     if st.passing_real is None and st.passing_main is None:   # no ВП flags (МАИ)
@@ -467,7 +477,7 @@ def _table_row(report, vuz, osnova, history) -> str:
     pmain = "—" if st.passing_main is None else yesno(st.passing_main)
 
     return (
-        f'<tr class="{accent}">{head}{_num_td(st.priority)}{name_td}'
+        f'<tr class="{accent}"{attrs}>{head}{_num_td(st.priority)}{name_td}'
         + _num_td(st.place) + _num_td(st.total) + _num_td(st.plan)
         + _num_td(st.final_score, disp=g(st.final_score))
         + f'<td class="preal">{preal}</td>'
@@ -476,28 +486,45 @@ def _table_row(report, vuz, osnova, history) -> str:
     )
 
 
+# (label, kind): kind = "num" (sort numerically by data-sort) / "text" (sort by
+# text) / "nosort" (not sortable, e.g. the sparkline column).
 _TABLE_HEADERS = [
-    ("ВУЗ", 0), ("Основа", 0), ("Приор", 1), ("Специальность", 0), ("Место", 1),
-    ("из", 1), ("Мест", 1), ("Балл", 1), ("Прох.ВП", 0), ("Осн.ВП", 0),
-    ("Согл/Дог", 0), ("Δ", 1), ("Обновлено", 0),
+    ("ВУЗ", "text"), ("Основа", "text"), ("Приор", "num"), ("Специальность", "text"),
+    ("Место", "num"), ("из", "num"), ("Мест", "num"), ("Балл", "num"),
+    ("Прох.ВП", "text"), ("Осн.ВП", "text"), ("Согл/Дог", "text"), ("Δ", "num"),
+    ("Тренд", "nosort"), ("Обновлено", "text"),
 ]
 
 
 def build_table_html(groups, history, now=None) -> str:
-    """Desktop one-table view: row = specialty, columns = all params, sortable."""
+    """Desktop one-table view: row = specialty, columns = all params, sortable,
+    with ВУЗ/основа filter chips and a place-trend sparkline column."""
     if now is None:
         now = datetime.now(timezone.utc)
     elif now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
+
+    vuz_order = []
+    osn_present = set()
+    for name, _ in groups:
+        v, o = _group_axes(name)
+        if v not in vuz_order:
+            vuz_order.append(v)
+        osn_present.add(o)
+    osn_order = [o for o in ("бюджет", "платно") if o in osn_present]
 
     rows = [
         _table_row(r, *_group_axes(name), history)
         for name, reps in groups for r in reps
     ]
     tbody = "".join(rows) or f'<tr><td colspan="{len(_TABLE_HEADERS)}" class="empty">Нет данных.</td></tr>'
-    thead = "".join(
-        f'<th{" data-num" if num else ""}>{esc(h)}</th>' for h, num in _TABLE_HEADERS
-    )
+
+    def _th(h, kind):
+        attr = " data-num" if kind == "num" else " data-nosort" if kind == "nosort" else ""
+        return f"<th{attr}>{esc(h)}</th>"
+
+    thead = "".join(_th(h, k) for h, k in _TABLE_HEADERS)
+    filters = _filter_bar(vuz_order, osn_order)   # shared with the card page
     return (
         "<!doctype html>\n"
         '<html lang="ru"><head>\n'
@@ -508,7 +535,8 @@ def build_table_html(groups, history, now=None) -> str:
         f"<style>{_TABLE_STYLE}</style>\n"
         "</head><body>\n"
         '<div class="wrap-wide">\n'
-        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS) + "</div>\n"
+        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS) + filters + "</div>\n"
+        '<p class="no-match" hidden>Нет строк под выбранный фильтр.</p>\n'
         '<div class="table-scroll"><table id="grid"><thead><tr>'
         + thead + "</tr></thead><tbody>\n" + tbody + "\n</tbody></table></div>\n"
         '<footer class="foot">обновляется каждый час · клик по заголовку — сортировка · vuz_monitor</footer>\n'
@@ -746,14 +774,30 @@ body {
 .summary .who { color:var(--muted); font-variant-numeric:tabular-nums; }
 .stale { color:var(--red); }
 .page-link { color:var(--accent); text-decoration:none; font-weight:600; white-space:nowrap; }
+.filters { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+.filter-row { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.filter-lbl { font-size:11px; color:var(--muted); min-width:42px; }
+.chip {
+  font:inherit; font-size:12px; line-height:1; padding:5px 11px; border-radius:999px;
+  border:1px solid var(--border); background:var(--card); color:var(--fg);
+  cursor:pointer; -webkit-appearance:none; appearance:none;
+}
+.chip.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+.no-match { color:var(--muted); font-size:14px; padding:14px 2px; }
+[hidden] { display:none !important; }
 .table-scroll { overflow-x:auto; }
 #grid { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
 #grid th, #grid td { padding:5px 8px; text-align:left; border-bottom:1px solid var(--border); white-space:nowrap; }
 #grid thead th {
-  position:sticky; top:48px; z-index:4; background:var(--bg); cursor:pointer;
+  position:sticky; top:var(--topbar-h, 92px); z-index:4; background:var(--bg); cursor:pointer;
   user-select:none; font-weight:600; color:var(--muted); border-bottom:2px solid var(--border);
 }
+#grid thead th[data-nosort] { cursor:default; }
 #grid thead th:hover { color:var(--fg); }
+#grid td.spark { padding:2px 8px; }
+#grid .spark-svg { width:60px; height:18px; overflow:visible; vertical-align:middle; }
+#grid .spark-place polyline { stroke:var(--accent); stroke-width:1.6; fill:none; stroke-linejoin:round; stroke-linecap:round; }
+#grid .spark-place circle { fill:var(--accent); }
 #grid thead th[aria-sort="ascending"]::after { content:" ▲"; }
 #grid thead th[aria-sort="descending"]::after { content:" ▼"; }
 #grid td.num { text-align:right; }
@@ -774,50 +818,100 @@ body {
 """
 
 
-# Click a header to sort the table. Numeric columns (data-num) sort by data-sort;
-# text columns by text; missing values always sort to the bottom. No JS → static.
+# Click a header to sort (numeric by data-sort, text by text, missing last; the
+# Тренд column is data-nosort). ВУЗ/основа chips filter rows (default: show all).
+# No JS → static full table.
 _TABLE_SCRIPT = """
 (function () {
   var table = document.getElementById('grid');
-  if (!table || !table.tHead || !table.tBodies.length) return;
-  var tbody = table.tBodies[0];
-  var ths = table.tHead.rows[0].cells;
+  var topbar = document.querySelector('.topbar');
+  var noMatch = document.querySelector('.no-match');
 
-  function val(row, idx, num) {
-    var td = row.cells[idx];
-    if (!td) return null;
-    if (num) {
-      var d = td.getAttribute('data-sort');
-      if (d === null || d === '') return null;
-      var n = parseFloat(d);
-      return isNaN(n) ? null : n;
-    }
-    var t = (td.textContent || '').trim().toLowerCase();
-    return t === '' || t === '—' ? null : t;
+  function setOffset() {
+    if (topbar) document.documentElement.style.setProperty('--topbar-h', topbar.offsetHeight + 'px');
+  }
+  setOffset();
+  window.addEventListener('resize', setOffset);
+
+  // --- sortable columns ---
+  if (table && table.tHead && table.tBodies.length) {
+    var tbody = table.tBodies[0];
+    var ths = table.tHead.rows[0].cells;
+    var val = function (row, idx, num) {
+      var td = row.cells[idx];
+      if (!td) return null;
+      if (num) {
+        var d = td.getAttribute('data-sort');
+        if (d === null || d === '') return null;
+        var n = parseFloat(d);
+        return isNaN(n) ? null : n;
+      }
+      var t = (td.textContent || '').trim().toLowerCase();
+      return t === '' || t === '—' ? null : t;
+    };
+    var sort = function (idx, num, asc) {
+      var rows = Array.prototype.slice.call(tbody.rows);
+      rows.sort(function (a, b) {
+        var va = val(a, idx, num), vb = val(b, idx, num);
+        if (va === null && vb === null) return 0;
+        if (va === null) return 1;        // missing always last
+        if (vb === null) return -1;
+        if (va < vb) return asc ? -1 : 1;
+        if (va > vb) return asc ? 1 : -1;
+        return 0;
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    };
+    Array.prototype.forEach.call(ths, function (th, idx) {
+      if (th.hasAttribute('data-nosort')) return;
+      var num = th.hasAttribute('data-num');
+      th.addEventListener('click', function () {
+        var asc = th.getAttribute('aria-sort') !== 'ascending';
+        Array.prototype.forEach.call(ths, function (t) { t.removeAttribute('aria-sort'); });
+        th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
+        sort(idx, num, asc);
+      });
+    });
   }
 
-  function sort(idx, num, asc) {
-    var rows = Array.prototype.slice.call(tbody.rows);
-    rows.sort(function (a, b) {
-      var va = val(a, idx, num), vb = val(b, idx, num);
-      if (va === null && vb === null) return 0;
-      if (va === null) return 1;        // missing always last
-      if (vb === null) return -1;
-      if (va < vb) return asc ? -1 : 1;
-      if (va > vb) return asc ? 1 : -1;
-      return 0;
+  // --- ВУЗ / основа filter (default: everything visible) ---
+  var frows = Array.prototype.slice.call(document.querySelectorAll('.filter-row'));
+  var trs = table ? Array.prototype.slice.call(table.tBodies[0].rows) : [];
+  if (frows.length && trs.length) {
+    var state = { vuz: '__all__', osnova: '__all__' };
+    try {
+      var saved = JSON.parse(localStorage.getItem('vuz_table_filter') || '{}');
+      if (saved.vuz) state.vuz = saved.vuz;
+      if (saved.osnova) state.osnova = saved.osnova;
+    } catch (e) {}
+    var apply = function () {
+      var any = false;
+      trs.forEach(function (r) {
+        var v = r.getAttribute('data-vuz'), o = r.getAttribute('data-osnova');
+        var show = (state.vuz === '__all__' || state.vuz === v) &&
+                   (state.osnova === '__all__' || state.osnova === o);
+        r.hidden = !show; if (show) any = true;
+      });
+      if (noMatch) noMatch.hidden = any;
+      frows.forEach(function (row) {
+        var dim = row.getAttribute('data-dim');
+        Array.prototype.forEach.call(row.querySelectorAll('.chip'), function (ch) {
+          ch.classList.toggle('active', ch.getAttribute('data-val') === state[dim]);
+        });
+      });
+      try { localStorage.setItem('vuz_table_filter', JSON.stringify(state)); } catch (e) {}
+      setOffset();
+    };
+    frows.forEach(function (row) {
+      var dim = row.getAttribute('data-dim');
+      row.addEventListener('click', function (e) {
+        var ch = e.target && e.target.closest ? e.target.closest('.chip') : null;
+        if (!ch) return;
+        state[dim] = ch.getAttribute('data-val');
+        apply();
+      });
     });
-    rows.forEach(function (r) { tbody.appendChild(r); });
+    apply();
   }
-
-  Array.prototype.forEach.call(ths, function (th, idx) {
-    var num = th.hasAttribute('data-num');
-    th.addEventListener('click', function () {
-      var asc = th.getAttribute('aria-sort') !== 'ascending';
-      Array.prototype.forEach.call(ths, function (t) { t.removeAttribute('aria-sort'); });
-      th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
-      sort(idx, num, asc);
-    });
-  });
 })();
 """

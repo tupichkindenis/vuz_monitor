@@ -90,7 +90,7 @@ def test_table_no_vp_flags_shows_dash():
     html = dashboard.build_table_html(
         group_reports([mk_report("МАИ", mk_status(passing_real=None, passing_main=None),
                                  group="МАИ — бюджет")]), {}, now=NOW)
-    assert '<tr class="neutral">' in html
+    assert '<tr class="neutral"' in html
     assert '<td class="preal"><span class="muted">—</span></td>' in html   # Прох.ВП «—»
 
 
@@ -98,7 +98,27 @@ def test_table_absent_row():
     st = mk_status(present=False, place=None, final_score=None, priority=None,
                    passing_real=None, passing_main=None)
     html = dashboard.build_table_html(group_reports([mk_report("Спец", st)]), {}, now=NOW)
-    assert '<tr class="absent">' in html and "выбыл" in html
+    assert '<tr class="absent"' in html and "выбыл" in html
+
+
+def test_table_filter_chips_and_row_axes():
+    reps = [
+        mk_report("A", mk_status(), group="МИРЭА — бюджет", watch_id="w1"),
+        mk_report("B", mk_status(), group="МЭИ — платно", watch_id="w2", title="платно"),
+    ]
+    html = dashboard.build_table_html(group_reports(reps), {}, now=NOW)
+    assert 'data-dim="vuz"' in html and 'data-dim="osnova"' in html      # filter chip rows
+    assert ">МИРЭА<" in html and ">МЭИ<" in html
+    assert 'data-vuz="МИРЭА" data-osnova="бюджет"' in html               # rows carry axes
+    assert 'data-vuz="МЭИ" data-osnova="платно"' in html
+    assert "data-nosort" in html                                        # Тренд not sortable
+
+
+def test_table_sparkline_from_history():
+    reps = [mk_report("Спец", mk_status(), watch_id="w1")]
+    hist = {("w1", "1366129"): [{"place": 100}, {"place": 60}, {"place": 40}]}
+    html = dashboard.build_table_html(group_reports(reps), hist, now=NOW)
+    assert 'class="spark"' in html and "spark-place" in html and "<polyline" in html
 
 
 def test_cards_page_links_to_table():
