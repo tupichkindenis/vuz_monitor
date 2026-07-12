@@ -156,13 +156,10 @@ def _pill(text: str, cls: str) -> str:
     return f'<span class="pill {cls}">{esc(text)}</span>'
 
 
-def _head(name: str, pill_html: str, place_html: str = "") -> str:
-    """Card header: specialty name on its own full-width line, then место + pill
-    on a second line — stable regardless of how long the name wraps."""
-    return (
-        f'<div class="spec-name">{name}</div>'
-        f'<div class="status-line">{place_html}{pill_html}</div>'
-    )
+def _head(name: str, pill_html: str) -> str:
+    """Card header: name on the left (clamped to 2 lines with «…» when too long),
+    status pill pinned to the top-right corner."""
+    return f'<div class="card-head"><div class="spec-name">{name}</div>{pill_html}</div>'
 
 
 def _card(report, points) -> str:
@@ -223,11 +220,11 @@ def _card(report, points) -> str:
         consent_txt = f"Согласие: {yesno(st.consent)}"
 
     tertiary = f"Основной ВП: {yesno(st.passing_main)} · {esc(consent_txt)}"
-    place_html = f'<span class="place">{esc(place)}</span>'
 
     return (
         f'<div class="card {accent}">'
-        + _head(name, _pill(pass_real(st.passing_real), pill_cls), place_html)
+        + _head(name, _pill(pass_real(st.passing_real), pill_cls))
+        + f'<div class="place-line">{esc(place)}</div>'
         + f'<div class="secondary">{secondary}</div>'
         + f'<div class="tertiary">{tertiary}</div>'
         + _spark_row(points) + "</div>"
@@ -415,11 +412,16 @@ body {
 .card.pass-main { border-left-color:var(--amber-bd); }
 .card.absent, .card.nodata, .card.err { opacity:.75; }
 .card.err { border-left-color:var(--red); }
-.spec-name { font-size:15px; font-weight:600; }
-.status-line { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin-top:5px; }
-.place { font-size:13px; color:var(--muted); }
+.card-head { display:flex; align-items:flex-start; gap:8px; }
+.spec-name {
+  flex:1 1 auto; min-width:0; font-size:15px; font-weight:600;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+  overflow:hidden; overflow-wrap:anywhere;
+}
+.place-line { font-size:13px; color:var(--muted); margin-top:5px; }
 .pill {
-  font-size:12px; font-weight:600; padding:2px 8px; border-radius:999px; white-space:nowrap;
+  flex:0 0 auto; font-size:12px; font-weight:600; padding:2px 8px;
+  border-radius:999px; white-space:nowrap;
 }
 .pill.green { color:#fff; background:var(--green); }
 .pill.amber { color:#1a1d21; background:var(--amber-bd); }
