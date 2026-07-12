@@ -54,6 +54,29 @@ def test_code_is_masked_on_page():
     assert 'content="noindex' in html  # reduce search indexing
 
 
+def test_filter_switchers_present():
+    reps = [
+        mk_report("A", mk_status(), group="МИРЭА — бюджет", watch_id="w1"),
+        mk_report("B", mk_status(), group="МИРЭА — платно", watch_id="w2", title="платно"),
+        mk_report("C", mk_status(), group="МЭИ — бюджет", watch_id="w3"),
+    ]
+    html = dashboard.build_html(group_reports(reps), {}, now=NOW)
+    assert 'data-dim="vuz"' in html and 'data-dim="osnova"' in html      # both switcher rows
+    assert ">МИРЭА<" in html and ">МЭИ<" in html                          # ВУЗ chips
+    assert ">Бюджет<" in html and ">Платно<" in html                      # основа chips
+    assert 'data-vuz="МИРЭА" data-osnova="бюджет"' in html                # sections carry axes
+    assert 'data-vuz="МИРЭА" data-osnova="платно"' in html
+    assert 'data-vuz="МЭИ" data-osnova="бюджет"' in html
+    assert "localStorage" in html                                        # JS enhancement present
+
+
+def test_switchers_omitted_when_single_choice():
+    # one ВУЗ, one основа → no point offering a filter
+    html = _html([mk_report("Только один", mk_status(), group="МИРЭА — бюджет")])
+    assert 'data-dim="vuz"' not in html
+    assert 'data-dim="osnova"' not in html
+
+
 def test_amber_when_only_main_passes():
     html = _html([mk_report("Спец", mk_status(passing_real=False, passing_main=True))])
     assert "pass-main" in html

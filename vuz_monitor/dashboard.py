@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from .diff import compute_status
-from .format import esc, fmt_source_time, g, is_paid, mask_code, pass_real, yesno
+from .format import esc, fmt_source_time, g, is_paid, mask_code, pass_real, split_group, yesno
 from .report import CodeReport, WatchReport, group_reports
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -227,7 +227,16 @@ def _card(report, points) -> str:
     )
 
 
-def _group_section(name, reports, history, now) -> str:
+def _group_axes(name):
+    """'МИРЭА — бюджет' -> ('МИРЭА', 'бюджет'). osnova is always 'бюджет'|'платно'."""
+    vuz, _ = split_group(name)
+    if not vuz:
+        vuz = name
+    osnova = "платно" if is_paid(name) else "бюджет"
+    return vuz, osnova
+
+
+def _group_section(name, reports, history, now, vuz, osnova) -> str:
     vuz_updated = _updated_label(reports)
     fetched = [r.fetched_at for r in reports if r.fetched_at]
     age = _age_hours(max(fetched), now) if fetched else None
@@ -247,7 +256,7 @@ def _group_section(name, reports, history, now) -> str:
         cards.append(_card(r, pts))
 
     return (
-        '<section class="group">'
+        f'<section class="group" data-vuz="{esc(vuz)}" data-osnova="{esc(osnova)}">'
         f'<div class="group-header"><span class="group-title">{esc(name)}</span>'
         f'<span class="group-meta">проходите: {passing}/{len(reports)} · обновлено {esc(vuz_updated)}{stale}</span></div>'
         + "".join(cards)
@@ -284,9 +293,21 @@ def build_html(groups, history, now=None) -> str:
     if age is not None and age > STALE_HOURS:
         summary_stale = f' · <span class="stale">данные устарели ({int(age)} ч)</span>'
 
-    sections = "".join(_group_section(name, reps, history, now) for name, reps in groups) or (
-        '<p class="empty">Нет отслеживаемых списков.</p>'
-    )
+    # Axes for the ВУЗ / основа switchers (first-seen order for ВУЗ).
+    vuz_order = []
+    osn_present = set()
+    for name, _ in groups:
+        v, o = _group_axes(name)
+        if v not in vuz_order:
+            vuz_order.append(v)
+        osn_present.add(o)
+    osn_order = [o for o in ("бюджет", "платно") if o in osn_present]
+
+    sections = "".join(
+        _group_section(name, reps, history, now, *_group_axes(name)) for name, reps in groups
+    ) or '<p class="empty">Нет отслеживаемых списков.</p>'
+
+    filters = _filter_bar(vuz_order, osn_order)
 
     return (
         "<!doctype html>\n"
@@ -298,16 +319,39 @@ def build_html(groups, history, now=None) -> str:
         f"<style>{_STYLE}</style>\n"
         "</head><body>\n"
         '<div class="wrap">\n'
+        '<div class="topbar">'
         '<div class="summary">'
         + (f'<span class="who">{esc(who)}</span> · ' if who else "")
         + f'<b>Проходной ВП: {n_real}/{n_total}</b> · Основной ВП: {n_main} · '
         f'согласий: {n_consent} · обновлено {esc(updated)}{summary_stale}'
-        "</div>\n"
+        "</div>"
+        + filters
+        + "</div>\n"
+        '<p class="no-match" hidden>Нет списков под выбранный фильтр.</p>\n'
         f"{sections}\n"
         '<footer class="foot">обновляется каждый час · vuz_monitor</footer>\n'
         "</div>\n"
+        f"<script>{_SCRIPT}</script>\n"
         "</body></html>\n"
     )
+
+
+def _chip(val, label) -> str:
+    return f'<button type="button" class="chip" data-val="{esc(val)}">{esc(label)}</button>'
+
+
+def _filter_bar(vuz_order, osn_order) -> str:
+    """Two rows of single-select toggle chips (ВУЗ / основа). A row is omitted
+    when it would offer only one choice."""
+    osn_labels = {"бюджет": "Бюджет", "платно": "Платно"}
+    rows = ""
+    if len(vuz_order) > 1:
+        chips = _chip("__all__", "Все") + "".join(_chip(v, v) for v in vuz_order)
+        rows += f'<div class="filter-row" data-dim="vuz"><span class="filter-lbl">ВУЗ</span>{chips}</div>'
+    if len(osn_order) > 1:
+        chips = _chip("__all__", "Все") + "".join(_chip(o, osn_labels.get(o, o)) for o in osn_order)
+        rows += f'<div class="filter-row" data-dim="osnova"><span class="filter-lbl">Основа</span>{chips}</div>'
+    return f'<div class="filters">{rows}</div>' if rows else ""
 
 
 _STYLE = """
@@ -330,15 +374,27 @@ body {
   -webkit-font-smoothing:antialiased;
 }
 .wrap { max-width:640px; margin:0 auto; padding:0 12px 40px; }
-.summary {
-  position:sticky; top:0; z-index:3; margin:0 -12px 12px; padding:10px 12px;
-  background:var(--bg); border-bottom:1px solid var(--border); font-size:13px;
+[hidden] { display:none !important; }
+.topbar {
+  position:sticky; top:0; z-index:4; margin:0 -12px 12px; padding:10px 12px;
+  background:var(--bg); border-bottom:1px solid var(--border);
 }
+.summary { font-size:13px; }
 .summary .who { color:var(--muted); font-variant-numeric:tabular-nums; }
+.filters { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+.filter-row { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.filter-lbl { font-size:11px; color:var(--muted); min-width:42px; }
+.chip {
+  font:inherit; font-size:13px; line-height:1; padding:6px 12px; border-radius:999px;
+  border:1px solid var(--border); background:var(--card); color:var(--fg);
+  cursor:pointer; -webkit-appearance:none; appearance:none;
+}
+.chip.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+.no-match { color:var(--muted); font-size:14px; padding:16px 0; }
 .stale { color:var(--red); }
 .group { margin-bottom:20px; }
 .group-header {
-  position:sticky; top:41px; z-index:2; display:flex; flex-wrap:wrap;
+  position:sticky; top:var(--topbar-h, 96px); z-index:2; display:flex; flex-wrap:wrap;
   align-items:baseline; gap:4px 10px; padding:6px 0;
   background:var(--bg); border-bottom:1px solid var(--border);
 }
@@ -378,4 +434,79 @@ body {
 .spark-score circle { fill:var(--muted); }
 .foot { font-size:11px; color:var(--muted); text-align:center; margin-top:16px; }
 .empty { color:var(--muted); font-size:14px; }
+"""
+
+
+# Progressive enhancement: with JS the chips filter sections by ВУЗ + основа
+# (single-select per row, choice remembered in localStorage). Without JS every
+# section stays visible — the page degrades to the full list.
+_SCRIPT = """
+(function () {
+  var rows = Array.prototype.slice.call(document.querySelectorAll('.filter-row'));
+  var sections = Array.prototype.slice.call(document.querySelectorAll('section.group'));
+  var noMatch = document.querySelector('.no-match');
+  var topbar = document.querySelector('.topbar');
+  if (!rows.length || !sections.length) return;
+
+  function hasChip(dim, val) {
+    var chips = document.querySelectorAll('.filter-row[data-dim="' + dim + '"] .chip');
+    for (var i = 0; i < chips.length; i++) {
+      if (chips[i].getAttribute('data-val') === val) return true;
+    }
+    return false;
+  }
+  function firstVal(dim) {
+    var chips = document.querySelectorAll('.filter-row[data-dim="' + dim + '"] .chip');
+    for (var i = 0; i < chips.length; i++) {
+      var v = chips[i].getAttribute('data-val');
+      if (v !== '__all__') return v;
+    }
+    return '__all__';
+  }
+
+  var state = { vuz: firstVal('vuz'), osnova: '__all__' };
+  try {
+    var saved = JSON.parse(localStorage.getItem('vuz_filter') || '{}');
+    if (saved.vuz) state.vuz = saved.vuz;
+    if (saved.osnova) state.osnova = saved.osnova;
+  } catch (e) {}
+  if (state.vuz !== '__all__' && !hasChip('vuz', state.vuz)) state.vuz = firstVal('vuz');
+  if (state.osnova !== '__all__' && !hasChip('osnova', state.osnova)) state.osnova = '__all__';
+
+  function apply() {
+    var any = false;
+    sections.forEach(function (sec) {
+      var v = sec.getAttribute('data-vuz'), o = sec.getAttribute('data-osnova');
+      var show = (state.vuz === '__all__' || state.vuz === v) &&
+                 (state.osnova === '__all__' || state.osnova === o);
+      sec.hidden = !show;
+      if (show) any = true;
+    });
+    if (noMatch) noMatch.hidden = any;
+    rows.forEach(function (row) {
+      var dim = row.getAttribute('data-dim');
+      Array.prototype.forEach.call(row.querySelectorAll('.chip'), function (ch) {
+        ch.classList.toggle('active', ch.getAttribute('data-val') === state[dim]);
+      });
+    });
+    try { localStorage.setItem('vuz_filter', JSON.stringify(state)); } catch (e) {}
+  }
+
+  rows.forEach(function (row) {
+    var dim = row.getAttribute('data-dim');
+    row.addEventListener('click', function (e) {
+      var ch = e.target && e.target.closest ? e.target.closest('.chip') : null;
+      if (!ch) return;
+      state[dim] = ch.getAttribute('data-val');
+      apply();
+    });
+  });
+
+  function setOffset() {
+    if (topbar) document.documentElement.style.setProperty('--topbar-h', topbar.offsetHeight + 'px');
+  }
+  setOffset();
+  window.addEventListener('resize', setOffset);
+  apply();
+})();
 """
