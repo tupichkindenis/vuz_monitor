@@ -262,26 +262,58 @@ def _spec(title, history, tracked=None):
     return {"title": title, "history": history, "tracked": tracked}
 
 
-def test_score_page_renders_title_and_before_after():
-    from vuz_monitor.dashboard import build_score_progress_html
-    hist = [
-        {"ts": _iso(-1), "total": 100, "no_score": 50, "buckets": {1300000: [40, 20]}},
-        {"ts": _iso(0), "total": 102, "no_score": 44, "buckets": {1300000: [40, 15]}},
+# Fixed clock for deterministic intraday-slot tests. MSK = UTC+3.
+_NOW = datetime(2026, 7, 13, 17, 0, tzinfo=timezone.utc)   # 20:00 MSK, 13.07 (all slots past)
+
+
+def _row(ts, total, no_score, buckets):
+    return {"ts": ts, "total": total, "no_score": no_score, "buckets": buckets}
+
+
+def _intraday_hist():
+    return [
+        _row("2026-07-12T20:00:00+00:00", 90, 50, {1300000: [40, 25]}),   # 23:00 MSK — конец вчера
+        _row("2026-07-13T07:00:00+00:00", 100, 48, {1300000: [40, 22]}),  # 10:00 MSK
+        _row("2026-07-13T11:00:00+00:00", 101, 46, {1300000: [40, 20]}),  # 14:00 MSK
+        _row("2026-07-13T16:00:00+00:00", 102, 44, {1300000: [40, 18]}),  # 19:00 MSK
     ]
-    html = build_score_progress_html([_spec("Интеллектуальные системы", hist)])
-    assert "Интеллектуальные системы" in html          # specialty title
-    assert "без баллов" in html.lower()
-    assert "50" in html and "44" in html               # было / стало (no_score)
+
+
+def test_score_page_intraday_slot_headers_and_values():
+    from vuz_monitor.dashboard import build_score_progress_html
+    html = build_score_progress_html([_spec("Интеллектуальные системы", _intraday_hist())], now=_NOW)
+    assert "Интеллектуальные системы" in html
+    for lbl in ("конец вчера", "10:00", "14:00", "19:00", "Изменение"):
+        assert lbl in html
+    for v in ("50", "48", "46", "44"):        # «без баллов» across the four slots
+        assert v in html
+    # each slot header shows the actual snapshot time, not a dash
+    assert "12.07 23:00" in html              # конец вчера
+    assert "13.07 10:00" in html              # 10:00 slot
+
+
+def test_score_page_delta_today_vs_yesterday():
+    from vuz_monitor.dashboard import build_score_progress_html
+    html = build_score_progress_html([_spec("Спец", _intraday_hist())], now=_NOW)
+    assert ("-6" in html or "−6" in html)     # 19:00 (44) − конец вчера (50) = -6
+
+
+def test_score_page_future_slots_show_dash():
+    from vuz_monitor.dashboard import build_score_progress_html
+    now = datetime(2026, 7, 13, 9, 0, tzinfo=timezone.utc)   # 12:00 MSK → 14:00/19:00 future
+    hist = [
+        _row("2026-07-12T20:00:00+00:00", 90, 50, {1300000: [40, 25]}),   # вчера
+        _row("2026-07-13T07:00:00+00:00", 100, 48, {1300000: [40, 22]}),  # 10:00 MSK
+    ]
+    html = build_score_progress_html([_spec("Спец", hist)], now=now)
+    assert "48" in html          # 10:00 filled
+    assert "—" in html           # 14:00 / 19:00 not yet → dash, no crash
 
 
 def test_score_page_highlights_tracked_range():
     from vuz_monitor.dashboard import build_score_progress_html
-    hist = [
-        {"ts": _iso(-1), "total": 100, "no_score": 50, "buckets": {1300000: [40, 20]}},
-        {"ts": _iso(0), "total": 100, "no_score": 44, "buckets": {1300000: [40, 15]}},
-    ]
-    tracked = {"code": "1366129", "place": 3570, "total": 100, "no_score": True, "bucket": 1300000}
-    html = build_score_progress_html([_spec("Спец", hist, tracked=tracked)])
+    tracked = {"code": "1366129", "place": 3570, "total": 102, "no_score": True, "bucket": 1300000}
+    html = build_score_progress_html([_spec("Спец", _intraday_hist(), tracked=tracked)], now=_NOW)
     # public page → код участника is masked (same convention as every other page)
     assert "1366129" not in html
     assert "•••6129" in html                            # «ваш номер» block, masked
@@ -290,18 +322,17 @@ def test_score_page_highlights_tracked_range():
 
 def test_score_page_tracked_without_place_no_none():
     from vuz_monitor.dashboard import build_score_progress_html
-    hist = [{"ts": _iso(0), "total": 100, "no_score": 44, "buckets": {1300000: [40, 15]}}]
-    tracked = {"code": "1366129", "place": None, "total": 100, "no_score": True, "bucket": 1300000}
-    html = build_score_progress_html([_spec("Спец", hist, tracked=tracked)])
+    tracked = {"code": "1366129", "place": None, "total": 102, "no_score": True, "bucket": 1300000}
+    html = build_score_progress_html([_spec("Спец", _intraday_hist(), tracked=tracked)], now=_NOW)
     assert "место None" not in html                     # no place → don't render «место None»
     assert "•••6129" in html
 
 
-def test_score_page_single_point_no_comparison():
+def test_score_page_single_point_no_crash():
     from vuz_monitor.dashboard import build_score_progress_html
-    hist = [{"ts": _iso(0), "total": 100, "no_score": 44, "buckets": {1300000: [40, 15]}}]
-    html = build_score_progress_html([_spec("Спец", hist)])   # must not raise
-    assert "44" in html                                  # «Стало» still shown
+    hist = [_row("2026-07-13T07:00:00+00:00", 100, 44, {1300000: [40, 15]})]  # only 10:00 today
+    html = build_score_progress_html([_spec("Спец", hist)], now=_NOW)   # must not raise
+    assert "44" in html
     assert "<!doctype html>" in html
 
 

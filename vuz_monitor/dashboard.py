@@ -10,7 +10,7 @@ identical page offline. Formatters are shared with the notifier via ``format.py`
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .diff import compute_status
@@ -617,17 +617,42 @@ def _delta_html(new, old, good_down=True, mark: bool = True) -> str:
     return f'<span class="delta {"good" if good else "bad"}">{d:+d}{pct}{tick}</span>'
 
 
-def _baseline_row(history):
-    """The «Было» row: the most recent point at least 24h older than the latest,
-    else the earliest available. None when there's only one point."""
-    if len(history) < 2:
-        return None
-    latest_dt = _parse(history[-1]["ts"])
-    if latest_dt is None:
-        return history[0]
-    target = latest_dt - timedelta(hours=24)
-    older = [r for r in history[:-1] if (_parse(r["ts"]) or latest_dt) <= target]
-    return older[-1] if older else history[0]
+# Fixed intraday comparison slots (MSK clock hours) for the score page.
+SCORE_SLOTS = [("10:00", 10), ("14:00", 14), ("19:00", 19)]  # утро / день / вечер
+
+
+def _score_slots(history, now):
+    """Fixed comparison points: «конец вчера» + today's clock slots (MSK).
+    Returns [{label, dt, row}]; `row` is None when the slot is still in the future
+    or has no snapshot. A past slot carries the freshest snapshot at/before it (so
+    it reads «данные на 14:00», carried forward if МИРЭА hasn't republished)."""
+    now_msk = now.astimezone(MSK)
+    today = now_msk.date()
+    yesterday = today - timedelta(days=1)
+    parsed = []
+    for r in history:
+        dt = _parse(r["ts"])
+        if dt is not None:
+            parsed.append((dt.astimezone(MSK), r))
+    parsed.sort(key=lambda x: x[0])
+
+    def last_where(pred):
+        found = None
+        for dt, r in parsed:
+            if pred(dt):
+                found = (dt, r)
+        return found
+
+    y = last_where(lambda dt: dt.date() == yesterday)
+    slots = [{"label": "конец вчера", "dt": y[0] if y else None, "row": y[1] if y else None}]
+    for label, hh in SCORE_SLOTS:
+        target = datetime.combine(today, time(hh, 0), tzinfo=MSK)
+        if target > now_msk:                       # slot hasn't happened yet
+            slots.append({"label": label, "dt": None, "row": None})
+            continue
+        s = last_where(lambda dt, t=target: dt.date() == today and dt <= t)
+        slots.append({"label": label, "dt": s[0] if s else None, "row": s[1] if s else None})
+    return slots
 
 
 def _daily_no_score(history):
@@ -642,50 +667,78 @@ def _daily_no_score(history):
     return [by_day[d] for d in sorted(by_day)]
 
 
+def _slot_cell(row, getter):
+    """A numeric cell for one slot; «—» when the slot has no data (future/absent)."""
+    return f'<td class="num">{_grp(getter(row)) if row is not None else "—"}</td>'
+
+
 def _score_section(spec, now) -> str:
     hist = spec["history"]
-    latest = hist[-1]
-    base = _baseline_row(hist)
     tracked = spec.get("tracked")
+    slots = _score_slots(hist, now)
+    yrow = slots[0]["row"]                                    # конец вчера
+    today_last = next((s["row"] for s in reversed(slots[1:]) if s["row"] is not None), None)
 
-    base_ns = base["no_score"] if base else None
-    base_total = base["total"] if base else None
+    # header cells (slot label + the actual snapshot time under it). `dt` is an
+    # MSK-aware datetime already, so format it directly (not via _fetched_msk,
+    # which parses a ts string).
+    def _hdr(s):
+        sub = s["dt"].strftime("%d.%m %H:%M") if (s["row"] is not None and s["dt"]) else "—"
+        return f'<th class="num">{esc(s["label"])}<br><span class="ts">{esc(sub)}</span></th>'
+    slot_hdrs = "".join(_hdr(s) for s in slots)
+
+    def _summary_row(label, key, good_down):
+        cells = "".join(_slot_cell(s["row"], lambda r, k=key: r[k]) for s in slots)
+        if today_last is not None and yrow is not None:
+            delta = _delta_html(today_last[key], yrow[key], good_down=good_down)
+        else:
+            delta = '<span class="delta muted">—</span>'
+        return f'<tr><td>{label}</td>{cells}<td class="num">{delta}</td></tr>'
+
     summary = (
-        '<table class="cmp"><thead><tr><th>Показатель</th>'
-        f'<th>Было<br><span class="ts">{esc(_fetched_msk(base["ts"]) if base else "—")}</span></th>'
-        f'<th>Стало<br><span class="ts">{esc(_fetched_msk(latest["ts"]))}</span></th>'
-        '<th>Изменение</th></tr></thead><tbody>'
-        f'<tr><td>Всего без баллов</td><td class="num">{_grp(base_ns)}</td>'
-        f'<td class="num">{_grp(latest["no_score"])}</td>'
-        f'<td class="num">{_delta_html(latest["no_score"], base_ns)}</td></tr>'
-        f'<tr><td>Всего заявок в списке</td><td class="num">{_grp(base_total)}</td>'
-        f'<td class="num">{_grp(latest["total"])}</td>'
-        f'<td class="num">{_delta_html(latest["total"], base_total, good_down=None)}</td>'
-        '</tr></tbody></table>'
+        '<div class="cmp-scroll"><table class="cmp"><thead><tr><th>Показатель</th>'
+        + slot_hdrs + '<th class="num">Изменение</th></tr></thead><tbody>'
+        + _summary_row("Всего без баллов", "no_score", True)
+        + _summary_row("Всего заявок в списке", "total", None)
+        + "</tbody></table></div>"
     )
 
-    buckets = set(latest["buckets"])
-    if base:
-        buckets |= set(base["buckets"])
+    buckets = set()
+    for s in slots:
+        if s["row"] is not None:
+            buckets |= set(s["row"]["buckets"])
+
+    def _ns(row, b):
+        return row["buckets"].get(b, [0, 0])[1]
+
     rows = []
     for b in sorted(buckets):
-        tot, ns = latest["buckets"].get(b, [0, 0])
-        was_ns = base["buckets"].get(b, [0, 0])[1] if base else None
+        # «Всего» in this range = the freshest slot that has this bucket
+        total_b = 0
+        for s in reversed(slots):
+            if s["row"] is not None and b in s["row"]["buckets"]:
+                total_b = s["row"]["buckets"][b][0]
+                break
+        cells = "".join(_slot_cell(s["row"], lambda r, bb=b: _ns(r, bb)) for s in slots)
+        y_ns = _ns(yrow, b) if yrow is not None else None
+        t_ns = _ns(today_last, b) if today_last is not None else None
+        delta = (_delta_html(t_ns, y_ns) if (t_ns is not None and y_ns is not None)
+                 else '<span class="delta muted">—</span>')
         you = bool(tracked and tracked.get("bucket") == b)
         tr_cls = ' class="you"' if you else ""
         you_mark = " ◄ ваш" if you else ""
         rows.append(
             f"<tr{tr_cls}>"
             f'<td>{_grp(b)}–{_grp(b + BUCKET_WIDTH - 1)}{you_mark}</td>'
-            f'<td class="num">{_grp(tot)}</td>'
-            f'<td class="num">{_grp(was_ns)}</td>'
-            f'<td class="num">{_grp(ns)}</td>'
-            f'<td class="num">{_delta_html(ns, was_ns)}</td></tr>'
+            f'<td class="num">{_grp(total_b)}</td>{cells}'
+            f'<td class="num">{delta}</td></tr>'
         )
+    range_hdrs = "".join(f'<th class="num">{esc(s["label"])}</th>' for s in slots)
     ranges = (
-        '<table class="ranges"><thead><tr><th>Диапазон номера</th><th>Всего</th>'
-        '<th>Было б/б</th><th>Стало б/б</th><th>Изменение</th></tr></thead><tbody>'
-        + "".join(rows) + "</tbody></table>"
+        '<div class="ranges-scroll"><table class="ranges"><thead><tr>'
+        '<th>Диапазон номера</th><th class="num">Всего</th>' + range_hdrs
+        + '<th class="num">Изм</th></tr></thead><tbody>'
+        + "".join(rows) + "</tbody></table></div>"
     )
 
     spark = _sparkline(_daily_no_score(hist), higher_is_better=False, cls="spark-place")
@@ -718,8 +771,9 @@ def _score_section(spec, now) -> str:
 
 
 def build_score_progress_html(specialties, now=None) -> str:
-    """docs/mirea-scores.html — score-loading tracker: «Было/Стало» comparison,
-    range distribution, and a trend sparkline, per tracked competition."""
+    """docs/mirea-scores.html — score-loading tracker: intraday comparison
+    (конец вчера · 10:00 · 14:00 · 19:00 · Изменение), range distribution across
+    the same slots, and a trend sparkline, per tracked competition."""
     if now is None:
         now = datetime.now(timezone.utc)
     elif now.tzinfo is None:
@@ -760,10 +814,12 @@ body{margin:0;background:var(--bg);color:var(--fg);line-height:1.4;font:15px/1.4
 .caption{font-size:12px;color:var(--muted);margin-bottom:10px;}
 .yournum{font-size:14px;background:var(--you);border-radius:8px;padding:8px 10px;margin-bottom:12px;}
 table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;}
+.cmp-scroll,.ranges-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
 .cmp,.ranges{font-size:13px;}
-.cmp th,.ranges th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;border-bottom:1px solid var(--border);padding:5px 6px;}
-.cmp td,.ranges td{padding:5px 6px;border-bottom:1px solid var(--border);}
+.cmp th,.ranges th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;border-bottom:1px solid var(--border);padding:5px 6px;white-space:nowrap;}
+.cmp td,.ranges td{padding:5px 6px;border-bottom:1px solid var(--border);white-space:nowrap;}
 .num{text-align:right;}
+.cmp th.num,.ranges th.num{text-align:right;}
 .ts{font-weight:400;color:var(--muted);font-size:10px;}
 tr.you{background:var(--you);}
 .delta.good{color:var(--green);}
