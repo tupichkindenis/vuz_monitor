@@ -59,6 +59,18 @@ class Store:
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_hist ON code_history(watch_id, code, ts)"
         )
+        # Compact per-run aggregate for the score-loading tracker. One row per run
+        # per tracked competition. `buckets` is JSON {app_number_bucket: [total, no_score]}.
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS score_progress (
+                   source   TEXT NOT NULL,   -- = watch_id of the competition
+                   ts       TEXT NOT NULL,   -- UTC ISO, = snapshot fetched_at
+                   total    INTEGER NOT NULL,
+                   no_score INTEGER NOT NULL,
+                   buckets  TEXT NOT NULL,   -- JSON {"1200000":[492,121], ...}
+                   PRIMARY KEY (source, ts)
+               )"""
+        )
         self.conn.commit()
 
     def load_prev(self, watch_id: str) -> Optional[Snapshot]:
@@ -69,6 +81,15 @@ class Store:
         if not row:
             return None
         return snapshot_from_dict(json.loads(row[0]))
+
+    def load_all_snapshots(self, watch_id: str) -> list:
+        """Every stored snapshot for a watch, oldest first (for backfilling the
+        score-loading history from data already on disk)."""
+        rows = self.conn.execute(
+            "SELECT payload FROM snapshots WHERE watch_id=? ORDER BY fetched_at ASC",
+            (watch_id,),
+        ).fetchall()
+        return [snapshot_from_dict(json.loads(r[0])) for r in rows]
 
     def save(self, snap: Snapshot) -> None:
         self.conn.execute(
@@ -160,6 +181,48 @@ class Store:
                 "contract": None if contract is None else bool(contract),
             }
         return [by_day[d] for d in sorted(by_day)]
+
+    # --- score_progress (МИРЭА score-loading tracker) --- #
+    def append_score_progress(
+        self, source: str, ts: str, total: int, no_score: int, buckets: dict
+    ) -> None:
+        """Store one run's aggregate for a competition. Idempotent on (source, ts)
+        so backfilling from stored snapshots can't create duplicates."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO score_progress (source, ts, total, no_score, buckets) "
+            "VALUES (?,?,?,?,?)",
+            (source, ts, int(total), int(no_score),
+             json.dumps(buckets, ensure_ascii=False)),
+        )
+        self._prune_score_progress(source)
+        self.conn.commit()
+
+    def _prune_score_progress(self, source: str, days: int = HISTORY_RETENTION_DAYS) -> None:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        self.conn.execute(
+            "DELETE FROM score_progress WHERE source=? AND ts < ?", (source, cutoff)
+        )
+
+    def load_score_progress(self, source: str, days: int = HISTORY_RETENTION_DAYS) -> list:
+        """Raw per-run rows for a competition, oldest first (NOT downsampled — the
+        24h comparison needs hourly resolution; the trend chart downsamples itself).
+        Each point: {ts, total, no_score, buckets} with INTEGER bucket keys."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        rows = self.conn.execute(
+            "SELECT ts, total, no_score, buckets FROM score_progress "
+            "WHERE source=? AND ts >= ? ORDER BY ts ASC",
+            (source, cutoff),
+        ).fetchall()
+        out = []
+        for ts, total, no_score, buckets_json in rows:
+            raw = json.loads(buckets_json)
+            out.append({
+                "ts": ts,
+                "total": total,
+                "no_score": no_score,
+                "buckets": {int(k): v for k, v in raw.items()},
+            })
+        return out
 
     def close(self) -> None:
         self.conn.close()

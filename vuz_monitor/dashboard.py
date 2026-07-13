@@ -10,12 +10,12 @@ identical page offline. Formatters are shared with the notifier via ``format.py`
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .diff import compute_status
 from .format import esc, fmt_source_time, g, is_paid, mask_code, pass_real, split_group, yesno
-from .report import CodeReport, WatchReport, group_reports
+from .report import BUCKET_WIDTH, CodeReport, WatchReport, group_reports
 
 MSK = ZoneInfo("Europe/Moscow")
 STALE_HOURS = 2  # last snapshot older than this → «данные устарели» hint
@@ -66,12 +66,54 @@ def generate_table(config, store, now=None) -> str:
 
 
 def render_pages(config, store, now=None) -> dict:
-    """Both pages from a single state.db pass: {filename: html}."""
+    """All pages from a single state.db pass: {filename: html}. The score-loading
+    page (mirea-scores.html) is included only when a `track_scores` competition has
+    recorded history."""
     groups, history = _gather(config, store)
-    return {
-        "index.html": build_html(groups, history, now=now),
-        "table.html": build_table_html(groups, history, now=now),
+    specs = _gather_score_progress(config, store)
+    has_scores = bool(specs)
+    pages = {
+        "index.html": build_html(groups, history, now=now, link_scores=has_scores),
+        "table.html": build_table_html(groups, history, now=now, link_scores=has_scores),
     }
+    if has_scores:
+        pages["mirea-scores.html"] = build_score_progress_html(specs, now=now)
+    return pages
+
+
+def _gather_score_progress(config, store):
+    """One spec dict per `track_scores` competition that has recorded history:
+    {title, history (raw hourly rows ASC), tracked (ваш номер) | None}."""
+    specs = []
+    for w in config.watches:
+        if not w.track_scores:
+            continue
+        history = store.load_score_progress(w.watch_id)
+        if not history:
+            continue
+        snap = store.load_prev(w.watch_id)
+        title = snap.meta.title if (snap and snap.meta and snap.meta.title) else w.name
+        total_now = history[-1]["total"]
+        tracked = None
+        if snap:
+            for code in config.resolve_codes(w):
+                e = snap.by_code(code)
+                if e is None:
+                    continue
+                try:
+                    bucket = (int(e.code) // BUCKET_WIDTH) * BUCKET_WIDTH
+                except (TypeError, ValueError):
+                    bucket = None
+                tracked = {
+                    "code": e.code_display,
+                    "place": e.place,
+                    "total": total_now,
+                    "no_score": (not e.entrance_score) and (not e.is_bvi),
+                    "bucket": bucket,
+                }
+                break
+        specs.append({"title": title, "history": history, "tracked": tracked})
+    return specs
 
 
 # --------------------------------------------------------------------------- #
@@ -302,6 +344,7 @@ def _group_section(name, reports, history, now, vuz, osnova) -> str:
 
 _LINK_TABLE = '<a class="page-link" href="table.html">▦ таблица</a>'
 _LINK_CARDS = '<a class="page-link" href="index.html">☰ карточки</a>'
+_LINK_SCORES = '<a class="page-link" href="mirea-scores.html">📊 баллы</a>'
 
 
 def _summary(groups) -> dict:
@@ -343,7 +386,7 @@ def _summary_bar(groups, now, link_html: str = "") -> str:
     )
 
 
-def build_html(groups, history, now=None) -> str:
+def build_html(groups, history, now=None, link_scores=False) -> str:
     """Render the full page. `groups` = group_reports() output; `history` =
     {(watch_id, code_display): [daily points]}."""
     if now is None:
@@ -378,7 +421,7 @@ def build_html(groups, history, now=None) -> str:
         "</head><body>\n"
         '<div class="wrap">\n'
         '<div class="topbar">'
-        + _summary_bar(groups, now, _LINK_TABLE)
+        + _summary_bar(groups, now, _LINK_TABLE + (" " + _LINK_SCORES if link_scores else ""))
         + filters
         + "</div>\n"
         + _LEGEND + "\n"
@@ -496,7 +539,7 @@ _TABLE_HEADERS = [
 ]
 
 
-def build_table_html(groups, history, now=None) -> str:
+def build_table_html(groups, history, now=None, link_scores=False) -> str:
     """Desktop one-table view: row = specialty, columns = all params, sortable,
     with ВУЗ/основа filter chips and a place-trend sparkline column."""
     if now is None:
@@ -535,7 +578,7 @@ def build_table_html(groups, history, now=None) -> str:
         f"<style>{_TABLE_STYLE}</style>\n"
         "</head><body>\n"
         '<div class="wrap-wide">\n'
-        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS) + filters + "</div>\n"
+        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS + (" " + _LINK_SCORES if link_scores else "")) + filters + "</div>\n"
         '<p class="no-match" hidden>Нет строк под выбранный фильтр.</p>\n'
         '<div class="table-scroll"><table id="grid"><thead><tr>'
         + thead + "</tr></thead><tbody>\n" + tbody + "\n</tbody></table></div>\n"
@@ -547,6 +590,196 @@ def build_table_html(groups, history, now=None) -> str:
 
 
 # Collapsible legend explaining the ВП flags + pill colours (collapsed by default).
+# --------------------------------------------------------------------------- #
+# Score-loading tracker page (docs/mirea-scores.html)
+# --------------------------------------------------------------------------- #
+def _grp(n) -> str:
+    """Thousands-grouped integer with a non-breaking space (1266 -> '1 266')."""
+    if n is None:
+        return "—"
+    return f"{int(n):,}".replace(",", " ")
+
+
+def _delta_html(new, old, good_down=True, mark: bool = True) -> str:
+    """Signed change with %. `good_down`: is a DECREASE the good direction (as for
+    «без баллов»)? Pass ``None`` for a neutral (informational) delta with no
+    good/bad colour. A good, nonzero move gets a ✅ when `mark`."""
+    if old is None:
+        return '<span class="delta muted">—</span>'
+    d = new - old
+    if d == 0:
+        return '<span class="delta muted">0</span>'
+    pct = f" ({d / old * 100:+.1f}%)" if old else ""   # old==0 → % undefined, show count only
+    if good_down is None:
+        return f'<span class="delta muted">{d:+d}{pct}</span>'
+    good = (d < 0) if good_down else (d > 0)
+    tick = " ✅" if (good and mark) else ""
+    return f'<span class="delta {"good" if good else "bad"}">{d:+d}{pct}{tick}</span>'
+
+
+def _baseline_row(history):
+    """The «Было» row: the most recent point at least 24h older than the latest,
+    else the earliest available. None when there's only one point."""
+    if len(history) < 2:
+        return None
+    latest_dt = _parse(history[-1]["ts"])
+    if latest_dt is None:
+        return history[0]
+    target = latest_dt - timedelta(hours=24)
+    older = [r for r in history[:-1] if (_parse(r["ts"]) or latest_dt) <= target]
+    return older[-1] if older else history[0]
+
+
+def _daily_no_score(history):
+    """«без баллов» count per MSK day (last observation of the day wins), for the
+    trend sparkline. Raw hourly rows in → one value per day out."""
+    by_day = {}
+    for r in history:
+        dt = _parse(r["ts"])
+        if dt is None:
+            continue
+        by_day[dt.astimezone(MSK).date().isoformat()] = r["no_score"]
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def _score_section(spec, now) -> str:
+    hist = spec["history"]
+    latest = hist[-1]
+    base = _baseline_row(hist)
+    tracked = spec.get("tracked")
+
+    base_ns = base["no_score"] if base else None
+    base_total = base["total"] if base else None
+    summary = (
+        '<table class="cmp"><thead><tr><th>Показатель</th>'
+        f'<th>Было<br><span class="ts">{esc(_fetched_msk(base["ts"]) if base else "—")}</span></th>'
+        f'<th>Стало<br><span class="ts">{esc(_fetched_msk(latest["ts"]))}</span></th>'
+        '<th>Изменение</th></tr></thead><tbody>'
+        f'<tr><td>Всего без баллов</td><td class="num">{_grp(base_ns)}</td>'
+        f'<td class="num">{_grp(latest["no_score"])}</td>'
+        f'<td class="num">{_delta_html(latest["no_score"], base_ns)}</td></tr>'
+        f'<tr><td>Всего заявок в списке</td><td class="num">{_grp(base_total)}</td>'
+        f'<td class="num">{_grp(latest["total"])}</td>'
+        f'<td class="num">{_delta_html(latest["total"], base_total, good_down=None)}</td>'
+        '</tr></tbody></table>'
+    )
+
+    buckets = set(latest["buckets"])
+    if base:
+        buckets |= set(base["buckets"])
+    rows = []
+    for b in sorted(buckets):
+        tot, ns = latest["buckets"].get(b, [0, 0])
+        was_ns = base["buckets"].get(b, [0, 0])[1] if base else None
+        you = bool(tracked and tracked.get("bucket") == b)
+        tr_cls = ' class="you"' if you else ""
+        you_mark = " ◄ ваш" if you else ""
+        rows.append(
+            f"<tr{tr_cls}>"
+            f'<td>{_grp(b)}–{_grp(b + BUCKET_WIDTH - 1)}{you_mark}</td>'
+            f'<td class="num">{_grp(tot)}</td>'
+            f'<td class="num">{_grp(was_ns)}</td>'
+            f'<td class="num">{_grp(ns)}</td>'
+            f'<td class="num">{_delta_html(ns, was_ns)}</td></tr>'
+        )
+    ranges = (
+        '<table class="ranges"><thead><tr><th>Диапазон номера</th><th>Всего</th>'
+        '<th>Было б/б</th><th>Стало б/б</th><th>Изменение</th></tr></thead><tbody>'
+        + "".join(rows) + "</tbody></table>"
+    )
+
+    spark = _sparkline(_daily_no_score(hist), higher_is_better=False, cls="spark-place")
+    trend = (
+        '<div class="trend"><span class="trend-cap">тренд «без баллов»</span>'
+        + (spark or '<span class="spark-dash">копим историю…</span>') + "</div>"
+    )
+
+    yourblock = ""
+    if tracked:
+        st = "без баллов" if tracked["no_score"] else "балл подгружен ✅"
+        where = ""
+        if tracked["place"] is not None:
+            place = f'место {tracked["place"]}' + (f' из {_grp(tracked["total"])}' if tracked["total"] else "")
+            where = esc(place) + " — "
+        # mask the код участника: this page is public (gh-pages), same convention
+        # as every other page — harder to tie the номер to a person via the URL.
+        yourblock = (
+            f'<div class="yournum">Ваш номер <b>{esc(mask_code(tracked["code"]))}</b>: '
+            f'{where}<b>{esc(st)}</b></div>'
+        )
+
+    return (
+        f'<section class="score-sec"><h2>{esc(spec["title"])}</h2>'
+        '<div class="caption">по данным одного конкурса (не по всей МИРЭА)</div>'
+        + yourblock + summary
+        + "<h3>Распределение по диапазонам номеров</h3>" + ranges + trend
+        + "</section>"
+    )
+
+
+def build_score_progress_html(specialties, now=None) -> str:
+    """docs/mirea-scores.html — score-loading tracker: «Было/Стало» comparison,
+    range distribution, and a trend sparkline, per tracked competition."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    sections = "".join(_score_section(s, now) for s in specialties) or \
+        '<p class="empty">Нет отслеживаемых конкурсов.</p>'
+    links = _LINK_CARDS + " " + _LINK_TABLE
+    return (
+        "<!doctype html>\n"
+        '<html lang="ru"><head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="robots" content="noindex, nofollow">\n'
+        "<title>ВУЗ-мониторинг · подгрузка баллов</title>\n"
+        f"<style>{_SCORE_STYLE}</style>\n"
+        "</head><body>\n"
+        '<div class="wrap">\n'
+        '<div class="topbar"><div class="summary"><b>Подгрузка баллов испытаний</b> · '
+        + links + "</div></div>\n"
+        f"{sections}\n"
+        '<footer class="foot">обновляется каждый час · vuz_monitor</footer>\n'
+        "</div>\n</body></html>\n"
+    )
+
+
+_SCORE_STYLE = """
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1a1d21;--muted:#6b7280;--border:#e5e7eb;--green:#15803d;--red:#b91c1c;--accent:#2563eb;--you:#fef9c3;}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--fg:#e6e8eb;--muted:#9aa4b2;--border:#252b33;--green:#4ade80;--red:#f87171;--accent:#60a5fa;--you:#3f3a12;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);line-height:1.4;font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:760px;margin:0 auto;padding:12px;}
+.topbar{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--border);padding:8px 0;margin-bottom:12px;z-index:5;}
+.summary{font-size:14px;}
+.page-link{color:var(--accent);text-decoration:none;margin-left:8px;font-size:13px;}
+.score-sec{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px;}
+.score-sec h2{font-size:16px;margin:0 0 2px;}
+.score-sec h3{font-size:13px;color:var(--muted);margin:16px 0 6px;font-weight:600;}
+.caption{font-size:12px;color:var(--muted);margin-bottom:10px;}
+.yournum{font-size:14px;background:var(--you);border-radius:8px;padding:8px 10px;margin-bottom:12px;}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;}
+.cmp,.ranges{font-size:13px;}
+.cmp th,.ranges th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;border-bottom:1px solid var(--border);padding:5px 6px;}
+.cmp td,.ranges td{padding:5px 6px;border-bottom:1px solid var(--border);}
+.num{text-align:right;}
+.ts{font-weight:400;color:var(--muted);font-size:10px;}
+tr.you{background:var(--you);}
+.delta.good{color:var(--green);}
+.delta.bad{color:var(--red);}
+.delta.muted,.muted{color:var(--muted);}
+.trend{display:flex;align-items:center;gap:8px;margin-top:12px;}
+.trend-cap{font-size:11px;color:var(--muted);}
+.spark-svg{width:120px;height:28px;}
+.spark-place polyline{stroke:var(--accent);stroke-width:1.6;fill:none;stroke-linejoin:round;stroke-linecap:round;}
+.spark-place circle{fill:var(--accent);}
+.spark-dash{color:var(--muted);font-size:12px;}
+.foot{font-size:11px;color:var(--muted);text-align:center;margin-top:16px;}
+.empty{color:var(--muted);}
+"""
+
+
 _LEGEND = (
     '<details class="legend">'
     "<summary>Что такое ВП · обозначения</summary>"

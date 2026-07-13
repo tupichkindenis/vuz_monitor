@@ -33,6 +33,8 @@ class WatchConfig:
     code_field: Optional[str] = None
     # lists that share a group go into ONE Telegram message (e.g. "МИРЭА — бюджет").
     group: Optional[str] = None
+    # build the score-loading tracker (docs/mirea-scores.html) for this competition.
+    track_scores: bool = False
     # html_table adapter specifics
     table_selector: Optional[str] = None
     columns: Optional[dict] = None
@@ -96,6 +98,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                 codes=[str(c) for c in w["codes"]] if w.get("codes") else None,
                 code_field=w.get("code_field") or raw.get("code_field"),
                 group=w.get("group") or raw.get("group"),
+                track_scores=bool(w.get("track_scores", False)),
                 table_selector=w.get("table_selector"),
                 columns=w.get("columns"),
                 encoding=w.get("encoding"),

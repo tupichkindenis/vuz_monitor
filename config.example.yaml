@@ -44,6 +44,10 @@ watches:
       edu_level: 2
     plan_override: null          # override places if the API omits `plan`
     codes: null                  # null -> use tracked_codes above
+    # track_scores: true         # build docs/mirea-scores.html for THIS competition:
+                                 # «динамика подгрузки баллов испытаний» — сколько заявок
+                                 # ещё без баллов, разбивка по диапазонам номеров, тренд.
+                                 # Область — один конкурс (не вся МИРЭА). Можно на нескольких.
 
   - name: "Интеллектуальные системы (договор)"
     group: "МИРЭА — договор"

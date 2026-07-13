@@ -10,7 +10,7 @@ from .adapters import get_adapter
 from .config import AppConfig, WatchConfig
 from .diff import compute_changes, compute_status
 from .models import ProgramMeta
-from .report import CodeReport, WatchReport, group_reports
+from .report import CodeReport, WatchReport, group_reports, score_progress
 from .store import Store
 
 log = logging.getLogger("vuz_monitor")
@@ -85,6 +85,50 @@ def _should_send_group(reports: list, mode: str, store: Store) -> bool:
     return True  # always
 
 
+def _record_score_progress(config: AppConfig, store: Store) -> None:
+    """Append one score-loading aggregate row per `track_scores` competition, from
+    the snapshot just saved this run. Idempotent on (watch_id, fetched_at). On the
+    first run for a watch (no history yet) seed the full trend from stored snapshots
+    so the page has data immediately."""
+    for watch in config.watches:
+        if not watch.track_scores:
+            continue
+        if not store.load_score_progress(watch.watch_id):
+            _backfill_watch(store, watch.watch_id)   # seed trend from disk
+            continue                                  # backfill already covers this run
+        snap = store.load_prev(watch.watch_id)
+        if snap is None:
+            continue
+        agg = score_progress(snap)
+        store.append_score_progress(
+            watch.watch_id, agg["ts"], agg["total"], agg["no_score"], agg["buckets"]
+        )
+
+
+def _backfill_watch(store: Store, watch_id: str) -> int:
+    n = 0
+    for snap in store.load_all_snapshots(watch_id):
+        agg = score_progress(snap)
+        store.append_score_progress(
+            watch_id, agg["ts"], agg["total"], agg["no_score"], agg["buckets"]
+        )
+        n += 1
+    return n
+
+
+def backfill_score_progress(config: AppConfig) -> int:
+    """One-time seed of score_progress from every stored snapshot of each
+    `track_scores` competition. Idempotent — safe to re-run."""
+    store = Store(config.db_path)
+    try:
+        return sum(
+            _backfill_watch(store, w.watch_id)
+            for w in config.watches if w.track_scores
+        )
+    finally:
+        store.close()
+
+
 def _render_dashboard(config: AppConfig, store: Store, out_dir: str) -> list:
     """Generate both pages from state.db and write them into ``out_dir``.
     Returns the written file paths."""
@@ -103,6 +147,11 @@ def build_dashboard(config: AppConfig, out_dir: str = DASHBOARD_DIR) -> int:
     """Standalone dashboard generation (CLI ``dashboard``) — offline, from state.db."""
     store = Store(config.db_path)
     try:
+        # Seed score history from stored snapshots for any tracked competition that
+        # has none yet, so a plain regen produces the score page without a full run.
+        for w in config.watches:
+            if w.track_scores and not store.load_score_progress(w.watch_id):
+                _backfill_watch(store, w.watch_id)
         written = _render_dashboard(config, store, out_dir)
     finally:
         store.close()
@@ -117,6 +166,15 @@ def run(config: AppConfig, dry_run: bool = False) -> int:
         if not reports:
             print("(no watches configured)")
             return 0
+
+        # Record the score-loading aggregate for tracked competitions before the
+        # dashboard render (the page reads score_progress). An aggregation bug must
+        # not fail the run.
+        if not dry_run:
+            try:
+                _record_score_progress(config, store)
+            except Exception as exc:
+                log.warning("score_progress recording failed: %s", exc)
 
         # Regenerate the dashboard every hour from state.db — BEFORE the send
         # decision, so it stays fresh even under on_change_only (no message) and

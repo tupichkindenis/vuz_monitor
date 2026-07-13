@@ -27,6 +27,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=pipeline.DASHBOARD_DIR,
         help=f"output directory for index.html + table.html (default: {pipeline.DASHBOARD_DIR})",
     )
+    sub.add_parser(
+        "backfill-scores",
+        help="seed the score-loading history (score_progress) from stored snapshots "
+             "for every track_scores competition (idempotent)",
+    )
     sub.add_parser("test-notify", help="send a test Telegram message")
     sub.add_parser("get-chat-id", help="print chat id(s) from recent bot updates")
     sub.add_parser("list-watches", help="validate and list configured watches")
@@ -71,6 +76,10 @@ def main(argv=None) -> int:
         return pipeline.run(cfg, dry_run=args.dry_run)
     if args.cmd == "dashboard":
         return pipeline.build_dashboard(cfg, out_dir=args.out)
+    if args.cmd == "backfill-scores":
+        n = pipeline.backfill_score_progress(cfg)
+        print(f"Backfilled {n} score_progress row(s) from stored snapshots.")
+        return 0
     if args.cmd == "test-notify":
         notify.send_message(
             cfg.telegram.bot_token,
