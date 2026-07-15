@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from .diff import compute_status
 from .format import esc, fmt_source_time, g, is_paid, mask_code, pass_real, split_group, yesno
+from .models import normalize_code
 from .report import BUCKET_WIDTH, CodeReport, WatchReport, group_reports
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -113,6 +114,50 @@ def _gather_score_progress(config, store):
                 }
                 break
         specs.append({"title": title, "history": history, "tracked": tracked})
+    return specs
+
+
+NEIGHBORS_AFTER = 10  # how many rows to show below our own place
+
+
+def _gather_neighbors(config, store):
+    """One spec dict per `track_neighbors` competition that has a snapshot:
+    {title, updated_at, fetched_at, paid, our_codes, we_absent, rows}. `rows` is the
+    window «все на нашем месте и выше + следующие NEIGHBORS_AFTER», in place order.
+    When our code is absent from the list, `we_absent=True` and `rows` is the top
+    (NEIGHBORS_AFTER + 1)."""
+    specs = []
+    for w in config.watches:
+        if not w.track_neighbors:
+            continue
+        snap = store.load_prev(w.watch_id)
+        if snap is None:
+            continue
+        title = snap.meta.title if (snap.meta and snap.meta.title) else w.name
+        our_codes = {normalize_code(c) for c in config.resolve_codes(w)}
+        ranked = sorted(
+            [e for e in snap.entrants if e.place is not None],
+            key=lambda e: e.place,
+        )
+        our_places = [e.place for e in ranked if normalize_code(e.code_display) in our_codes]
+        if our_places:
+            cutoff = min(our_places)
+            ahead_and_self = [e for e in ranked if e.place <= cutoff]
+            after = [e for e in ranked if e.place > cutoff][:NEIGHBORS_AFTER]
+            rows = ahead_and_self + after
+            we_absent = False
+        else:
+            rows = ranked[: NEIGHBORS_AFTER + 1]
+            we_absent = True
+        specs.append({
+            "title": title,
+            "updated_at": snap.meta.updated_at if snap.meta else None,
+            "fetched_at": snap.fetched_at,
+            "paid": is_paid(title) or is_paid(w.group or w.name),
+            "our_codes": our_codes,
+            "we_absent": we_absent,
+            "rows": rows,
+        })
     return specs
 
 
