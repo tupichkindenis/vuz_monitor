@@ -1,7 +1,7 @@
 # Design: connectivity gate + deliver-then-commit ("no net → no message, no lost alert")
 
 **Date:** 2026-07-15
-**Status:** Approved (revised after Codex review), ready for implementation planning
+**Status:** Approved (revised after two Codex reviews), ready for implementation planning
 **Author:** Denis + Claude (brainstorming session)
 
 ## Problem
@@ -154,24 +154,48 @@ span **≥2 distinct hosts**. Rationale:
 
 ### 4. Deliver-then-commit — never lose a change (`pipeline.py`, `store.py`)
 
-**Marker.** A per-watch meta key `notified:{watch_id}` holds the `fetched_at` of
-the last snapshot whose group message was delivered.
+Semantics (chosen): **net change since last delivery.** The guarantee is that the
+user's *current* standing is always delivered correctly once Telegram recovers.
+Transient flaps during an outage are coalesced: A→B→A (ends back at A) sends
+nothing; A→B→C sends one `A→C`. We do NOT guarantee every intermediate transition
+(no outbox) — that was explicitly out of scope.
 
-**Baseline for change-detection.** `_process_watch` computes the diff against the
-last **delivered** snapshot, not the last saved one:
-- New `store.load_notified_snapshot(watch_id)`: reads `notified:{watch_id}`; if
-  set, loads the snapshot row with that `fetched_at`; returns `None` if the marker
-  is unset (fresh watch) or its snapshot was pruned after a long outage.
-- `None` baseline → `first_run` semantics → the group is sent. So the first alert,
-  or an alert after a long delivery gap, is never lost (at worst re-sent once).
-- `store.save(snap)` still runs every hour (append-only, pruned to last N), so
-  `load_prev` — used by the dashboard and by the `unchanged`/`updated_at` flag —
-  keeps returning the freshest snapshot. Only the change-detection baseline moves
-  to the delivered marker.
+**Durable delivered-baseline table (not a timestamp pointer).** The first draft
+made the baseline a `fetched_at` pointer into the `snapshots` table; because that
+table is pruned to the last `HISTORY_PER_WATCH` (48) rows, a watch unchanged for
+48h would lose its baseline and emit a fake «первый запуск» every ~2 days. Fixed
+by giving the baseline its own storage:
 
-**Send per group, commit the marker on success.** Replace the flat
-`for msg in messages: send_message(...)` loop with a per-group loop so the marker
-advances exactly for delivered groups:
+- New table `notified_snapshot(watch_id TEXT PRIMARY KEY, payload TEXT)` — **one
+  upserted row per watch, never pruned.** Holds the full snapshot last *delivered*.
+- `store.load_notified_snapshot(watch_id)` → the baseline `Snapshot` or `None`.
+- `store.promote_notified(watch_id)` → copies this watch's latest `snapshots`
+  payload (the one `_process_watch` just saved) into `notified_snapshot` (upsert).
+
+This resolves the pruning bug and removes any dependence on `fetched_at` being a
+unique row identity.
+
+**Baseline for change-detection (with lazy migration seed).** `_process_watch`
+diffs the current snapshot against the delivered baseline, not `load_prev`:
+
+```python
+baseline = store.load_notified_snapshot(watch.watch_id)
+if baseline is None:
+    prev = store.load_prev(watch.watch_id)
+    if prev is not None:                 # existing watch upgrading → seed, don't re-first-run
+        store.save_notified_snapshot(prev)
+        baseline = prev
+    # else: genuinely new watch → baseline stays None → first_run → send
+```
+
+This is the migration story: on the first run after deploy, every pre-existing
+watch is seeded from its last snapshot, so the release does NOT first-run all ~54
+watches. `first_run` is now keyed on `baseline is None` (genuinely new), so no
+watch perpetually re-announces «первый запуск». `store.save(snap)` still runs every
+hour, so `load_prev` (dashboard, `unchanged`/`updated_at` flag) stays fresh; only
+the change-detection baseline is the delivered one.
+
+**Send per group, promote the baseline on success (one transaction per group).**
 
 ```python
 delivered_all = True
@@ -183,19 +207,26 @@ for name, reports in groups:
     except notify.TelegramNetworkError:
         log.warning("Telegram unreachable; stopping after delivering earlier group(s)")
         delivered_all = False
-        break                       # this + remaining groups keep old markers → re-alert next run
-    for r in reports:               # group delivered → advance its watches' markers
-        if r.watch_id and r.fetched_at:
-            store.set_meta(f"notified:{r.watch_id}", r.fetched_at)
+        break                       # this + later groups keep old baselines → re-alert next run
+    with store.transaction():       # all-or-nothing for the group's baselines (Codex #8)
+        for r in reports:
+            if r.watch_id and r.fetched_at:   # only successfully-fetched watches
+                store.promote_notified(r.watch_id)
 
 if mode == "daily" and delivered_all:
     store.set_meta(HEARTBEAT_META_KEY, date.today().isoformat())
 ```
 
-A group whose send fails, and every group after it, keeps its previous marker; its
-accumulated change re-alerts on the next deliverable run. This also fixes the
-multi-message atomicity bug: partial delivery across groups is now correct instead
-of mislabeled "N not sent."
+A group whose send fails, and every group after it, keeps its previous baseline;
+its accumulated net change re-alerts on the next deliverable run.
+
+**Delivery is at-least-once, not atomic.** If a group splits into N messages
+(TG_LIMIT) and message 2 throws, the baseline is correctly held (it advances only
+after the whole inner loop), so the *next* run re-sends the whole group —
+duplicating message 1. Likewise a crash after Telegram accepts but before the
+promote commits duplicates the group next run. This is accepted at-least-once
+delivery (exactly-once needs Telegram idempotency, out of scope). The earlier
+"fixes multi-message atomicity" claim is withdrawn.
 
 ### 5. Guard the send — `TelegramNetworkError` (`notify.py`)
 
@@ -214,12 +245,34 @@ When a rendered section is connectivity-failed (`report.net_error`), render
 still don't want a raw errno string. Source failures (`net_error=False`) keep the
 full `– ⚠️ ошибка: {error}`.
 
-### Dashboard freshness (addressing Codex #8)
+### 7. Config validation — unique `watch_id` (`config.py`)
 
-Because `store.save(snap)` still runs every hour and the dashboard reads the
-latest snapshot via `load_prev`, a suppressed or undelivered run does **not**
-stale the dashboard beyond the current hour — only the *change-detection baseline*
-is held back. No new staleness is introduced.
+`watch_id = sha1(adapter+url+params)[:12]` excludes `group`/`codes`, so two watches
+could collide on one baseline row and one group's delivery could advance another's
+(Codex #4). The store already assumes `watch_id` uniqueness for snapshots/history,
+so make it explicit: `load_config` raises a clear error if two watches share a
+`watch_id`. Fail fast at startup rather than corrupt alerts silently.
+
+### Documented behaviours / accepted limitations
+
+- **Dashboard freshness (Codex #8):** `store.save(snap)` still runs every hour and
+  the dashboard reads the latest snapshot via `load_prev`, so a suppressed or
+  undelivered run does not stale the dashboard beyond the current hour — only the
+  change-detection baseline is held back.
+- **Single-host DNS outage reads as ⏳ (Codex #10):** a genuine `socket.gaierror`
+  for one university renders `– ⏳ временно недоступно`, not `⚠️`. The gate does not
+  fire (one host), so it is not swallowed; a persistent failure shows ⏳ every hour,
+  which is visible. Distinguishing transient from persistent is out of scope.
+- **`fetched_at` / UTC ordering (Codex #7):** `load_prev`/prune order by the ISO
+  `fetched_at` string, correct because every adapter stamps UTC via `now_iso()`.
+  The baseline no longer depends on `fetched_at` identity (it has its own table),
+  but this UTC invariant is documented, not enforced.
+- **Host count is a heuristic (Codex #11):** ≥2 distinct hostnames is a proxy for
+  ≥2 independent sources; aliases pointing at one backend could satisfy it. True for
+  the current 4-university config; noted as configuration-dependent.
+- **At-least-once delivery (Codex #5, #9):** see §4 — a split group may re-send its
+  first chunk on retry; a crash between Telegram-accept and baseline-commit
+  duplicates the group. Accepted.
 
 ## Files touched
 
@@ -227,8 +280,9 @@ is held back. No new staleness is introduced.
 |------|--------|
 | `vuz_monitor/adapters/base.py` | add `is_connectivity_error(exc)` + `_causes` + `_NET_ERRNOS` |
 | `vuz_monitor/report.py` | add `net_error: bool` and `host: Optional[str]` to `WatchReport` |
-| `vuz_monitor/store.py` | add `load_notified_snapshot(watch_id)` (+ query snapshot by `fetched_at`) |
-| `vuz_monitor/pipeline.py` | set `net_error`/`host` on error reports and `watch_id`/`fetched_at` on success reports; diff against notified baseline; add gate; per-group send + marker commit |
+| `vuz_monitor/config.py` | `load_config` validates unique `watch_id` (fail fast) |
+| `vuz_monitor/store.py` | new `notified_snapshot` table + `load_notified_snapshot`, `save_notified_snapshot`, `promote_notified`, and a `transaction()` context manager |
+| `vuz_monitor/pipeline.py` | set `net_error`/`host` on error reports and `watch_id`/`fetched_at` on success reports; diff against delivered baseline (lazy migration seed); add gate; per-group send + baseline promote |
 | `vuz_monitor/notify.py` | add `TelegramNetworkError`; raise it only for connectivity in `_api_call`; calm text in `_specialty_block` |
 | `tests/test_connectivity.py` | new test file (below) |
 
@@ -258,12 +312,23 @@ New `tests/test_connectivity.py`, plus additions to pipeline/notify tests:
 - `dry_run=True` with all-connectivity → dry-run output still printed (gate exempt).
 
 **Deliver-then-commit (`run` + `store`)**
-- change detected, send succeeds → `notified:{watch_id}` advances to current `fetched_at`.
-- change detected, `send_message` raises `TelegramNetworkError` → marker NOT advanced;
+- change detected, send succeeds → `promote_notified` sets baseline to current snapshot.
+- change detected, `send_message` raises `TelegramNetworkError` → baseline NOT promoted;
   next run (state saved, source unchanged) still reports the change (`has_changes` True).
-- two groups, group 1 delivers then group 2 throws → group 1 marker advanced, group 2
-  marker unchanged; `daily` heartbeat meta NOT set (`delivered_all` False).
-- no marker yet (fresh watch) → treated as first_run → sends.
+- two groups, group 1 delivers then group 2 throws → group 1 baseline promoted, group 2
+  baseline unchanged; `daily` heartbeat meta NOT set (`delivered_all` False).
+- **pruning (Codex #1):** watch unchanged for > `HISTORY_PER_WATCH` runs → its old
+  `snapshots` rows are pruned, but `notified_snapshot` persists → NO fake «первый запуск».
+- **migration (Codex #2):** state.db has snapshots but no `notified_snapshot` → first run
+  seeds baseline from `load_prev`; no first-run burst; a genuinely new watch (no prior
+  snapshot) still first-runs.
+- **reverted change / net semantics (Codex #3):** baseline A, undelivered B, source back
+  to A → next run diffs A→A → nothing sent; A→B→C → single `A→C`.
+- **at-least-once (Codex #5):** split group, message 2 throws → whole group re-sent next
+  run (message 1 duplicated); asserted as accepted behaviour, not a bug.
+
+**Config validation**
+- two watches with identical `adapter`+`url`+`params` (same `watch_id`) → `load_config` raises.
 
 **Send guard / text**
 - `send_message` raising `TelegramNetworkError` → `run()` returns 0, no exception.
