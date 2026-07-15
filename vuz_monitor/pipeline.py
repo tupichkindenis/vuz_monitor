@@ -4,9 +4,11 @@ from __future__ import annotations
 import logging
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import dashboard, notify
 from .adapters import get_adapter
+from .adapters.base import is_connectivity_error
 from .config import AppConfig, WatchConfig
 from .diff import compute_changes, compute_status
 from .models import ProgramMeta
@@ -27,7 +29,13 @@ def _process_watch(
         snap = adapter.fetch(watch)
     except Exception as exc:  # one bad source must not abort the whole run
         log.warning("watch %s failed: %s", watch.name, exc)
-        return WatchReport(name=watch.name, error=str(exc), group=watch.group or watch.name)
+        return WatchReport(
+            name=watch.name,
+            error=str(exc),
+            net_error=is_connectivity_error(exc),
+            host=urlsplit(watch.url).hostname,
+            group=watch.group or watch.name,
+        )
 
     prev = store.load_prev(watch.watch_id)
     unchanged = bool(
@@ -65,6 +73,8 @@ def _process_watch(
         codes=code_reports,
         unchanged_source=unchanged,
         group=watch.group or watch.name,
+        watch_id=watch.watch_id,
+        fetched_at=snap.fetched_at,
     )
 
 

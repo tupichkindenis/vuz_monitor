@@ -1,6 +1,9 @@
 """Pipeline wiring with a mock adapter (no network): run() writes code_history
 AND docs/index.html every hour; --dry-run touches neither."""
+import errno
 from datetime import datetime, timezone
+
+import httpx
 
 from vuz_monitor import pipeline
 from vuz_monitor.config import AppConfig, TelegramConfig, WatchConfig
@@ -16,7 +19,7 @@ class FakeAdapter:
         return self._snap
 
 
-def _snap(watch_id, place=5):
+def _legacy_snap(watch_id, place=5):
     meta = ProgramMeta(title="Спец", plan=40, total=100, updated_at="2026-07-11 09:00:00")
     ent = Entrant(code="1366129", code_display="1366129", place=place, final_score=250.0,
                   priority=1, consent=True, passing_main=True, passing_real=True)
@@ -24,7 +27,7 @@ def _snap(watch_id, place=5):
                     fetched_at=datetime.now(timezone.utc).isoformat())
 
 
-def _cfg(tmp_path):
+def _legacy_cfg(tmp_path):
     w = WatchConfig(name="Спец", adapter="fake", url="http://x", group="МИРЭА — бюджет")
     return AppConfig(
         telegram=TelegramConfig(chat_id="c", bot_token="t"),
@@ -39,9 +42,9 @@ def _patch(monkeypatch, tmp_path, snap):
 
 
 def test_run_writes_history_and_dashboard(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path)
+    cfg = _legacy_cfg(tmp_path)
     w = cfg.watches[0]
-    _patch(monkeypatch, tmp_path, _snap(w.watch_id, place=5))
+    _patch(monkeypatch, tmp_path, _legacy_snap(w.watch_id, place=5))
     sent = []
     monkeypatch.setattr(pipeline.notify, "send_message", lambda tok, chat, text: sent.append(text))
 
@@ -62,9 +65,9 @@ def test_run_writes_history_and_dashboard(tmp_path, monkeypatch):
 
 
 def test_dry_run_touches_nothing(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path)
+    cfg = _legacy_cfg(tmp_path)
     w = cfg.watches[0]
-    _patch(monkeypatch, tmp_path, _snap(w.watch_id))
+    _patch(monkeypatch, tmp_path, _legacy_snap(w.watch_id))
     sent = []
     monkeypatch.setattr(pipeline.notify, "send_message", lambda tok, chat, text: sent.append(text))
 
@@ -79,9 +82,9 @@ def test_dry_run_touches_nothing(tmp_path, monkeypatch):
 
 def test_dashboard_survives_render_error(tmp_path, monkeypatch):
     """A dashboard render bug must not fail the hourly run."""
-    cfg = _cfg(tmp_path)
+    cfg = _legacy_cfg(tmp_path)
     w = cfg.watches[0]
-    _patch(monkeypatch, tmp_path, _snap(w.watch_id))
+    _patch(monkeypatch, tmp_path, _legacy_snap(w.watch_id))
     monkeypatch.setattr(pipeline.notify, "send_message", lambda *a, **k: None)
     monkeypatch.setattr(
         pipeline.dashboard, "render_pages",
@@ -98,10 +101,10 @@ def test_dashboard_survives_render_error(tmp_path, monkeypatch):
 
 def test_build_dashboard_cli(tmp_path, monkeypatch):
     """Standalone `dashboard` command regenerates BOTH pages from state.db, offline."""
-    cfg = _cfg(tmp_path)
+    cfg = _legacy_cfg(tmp_path)
     w = cfg.watches[0]
     # seed one snapshot + history via a run, then regenerate to a fresh dir
-    _patch(monkeypatch, tmp_path, _snap(w.watch_id, place=7))
+    _patch(monkeypatch, tmp_path, _legacy_snap(w.watch_id, place=7))
     monkeypatch.setattr(pipeline.notify, "send_message", lambda *a, **k: None)
     pipeline.run(cfg, dry_run=False)
 
@@ -111,3 +114,62 @@ def test_build_dashboard_cli(tmp_path, monkeypatch):
     assert (out_dir / "index.html").exists() and (out_dir / "table.html").exists()
     assert "место 7" in (out_dir / "index.html").read_text(encoding="utf-8")
     assert 'id="grid"' in (out_dir / "table.html").read_text(encoding="utf-8")
+
+
+def _snap(watch_id, code="100", place=1, updated_at="2026-07-15 10:00:00"):
+    return Snapshot(
+        watch_id=watch_id,
+        meta=ProgramMeta(title="t", plan=None, total=1, updated_at=updated_at),
+        entrants=[Entrant(code=code, code_display=code, place=place, final_score=200.0,
+                          priority=1, consent=True, contract=None, payment=None,
+                          passing_main=None, passing_real=None, needs_dormitory=None, raw={})],
+        fetched_at="2026-07-15T07:00:00+00:00",
+    )
+
+
+def _watch(name="w", url="https://a.example/x", params=None):
+    return WatchConfig(name=name, adapter="fake", url=url, params=params or {}, codes=["100"])
+
+
+def _cfg(watches):
+    return AppConfig(telegram=TelegramConfig(chat_id="1", bot_token="t"),
+                     heartbeat="on_change_only", tracked_codes=["100"], watches=watches, db_path=":memory:")
+
+
+class _FakeAdapter:
+    def __init__(self, result):
+        self._result = result  # a Snapshot, or an Exception to raise
+    def fetch(self, watch):
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
+
+def _patch_adapter(monkeypatch, result):
+    monkeypatch.setattr(pipeline, "get_adapter", lambda name: _FakeAdapter(result))
+
+
+def test_process_watch_tags_connectivity_error(monkeypatch, tmp_path):
+    store = Store(str(tmp_path / "s.db"))
+    err = httpx.ConnectError("x"); err.__cause__ = OSError(errno.EHOSTUNREACH, "no route")
+    _patch_adapter(monkeypatch, err)
+    rep = pipeline._process_watch(_watch(url="https://host.one/x"), _cfg([]), store, dry_run=False)
+    assert rep.error and rep.net_error is True
+    assert rep.host == "host.one"
+
+
+def test_process_watch_tags_source_error(monkeypatch, tmp_path):
+    store = Store(str(tmp_path / "s.db"))
+    _patch_adapter(monkeypatch, ValueError("bad table"))
+    rep = pipeline._process_watch(_watch(), _cfg([]), store, dry_run=False)
+    assert rep.error and rep.net_error is False
+
+
+def test_process_watch_success_sets_watch_id_and_fetched_at(monkeypatch, tmp_path):
+    store = Store(str(tmp_path / "s.db"))
+    w = _watch()
+    _patch_adapter(monkeypatch, _snap(w.watch_id))
+    rep = pipeline._process_watch(w, _cfg([w]), store, dry_run=False)
+    assert rep.error is None
+    assert rep.watch_id == w.watch_id
+    assert rep.fetched_at == "2026-07-15T07:00:00+00:00"

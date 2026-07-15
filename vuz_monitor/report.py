@@ -64,6 +64,8 @@ class WatchReport:
     group: Optional[str] = None     # lists sharing a group go into one message
     watch_id: Optional[str] = None  # for dashboard history lookup
     fetched_at: Optional[str] = None  # last snapshot time (dashboard freshness)
+    net_error: bool = False          # failure was our own connectivity, not the source
+    host: Optional[str] = None       # hostname of the source (for the gate's host count)
 
     @property
     def has_changes(self) -> bool:
