@@ -881,6 +881,124 @@ tr.you{background:var(--you);}
 """
 
 
+# --------------------------------------------------------------------------- #
+# Neighbors list page (docs/mirea-list.html)
+# --------------------------------------------------------------------------- #
+def _note(e) -> str:
+    """«Примечание» text from the official passing flags."""
+    if e.passing_real:
+        return "планируется к зачислению"
+    return "—"
+
+
+def _neighbor_row(e, our_codes, paid) -> str:
+    ours = normalize_code(e.code_display) in our_codes
+    if ours:
+        tr_cls = "you"
+    elif e.passing_real:
+        tr_cls = "pass-real"
+    elif e.passing_main:
+        tr_cls = "pass-main"
+    else:
+        tr_cls = ""
+    num = f'{esc(e.place)}{" ◄ вы" if ours else ""}'
+    flag = e.paid_ok if paid else e.consent
+    cls_attr = f' class="{tr_cls}"' if tr_cls else ""
+    return (
+        f"<tr{cls_attr}>"
+        f'<td class="num">{num}</td>'
+        f'<td class="code">{esc(e.code_display)}</td>'
+        f'<td class="num">{esc(e.priority) if e.priority is not None else "—"}</td>'
+        f"<td>{esc(yesno(flag))}</td>"
+        f'<td class="num">{esc(g(e.entrance_score))}</td>'
+        f'<td class="num">{esc(g(e.achievement_score))}</td>'
+        f'<td class="num">{esc(g(e.final_score))}</td>'
+        f"<td>{esc(_note(e))}</td>"
+        "</tr>"
+    )
+
+
+def _neighbor_section(spec, now) -> str:
+    when = fmt_source_time(spec["updated_at"]) if spec["updated_at"] else _fetched_msk(spec["fetched_at"])
+    paid = spec["paid"]
+    flag_hdr = "Платн" if paid else "Согл"
+    banner = ('<div class="banner">вашего кода нет в этом списке — показан топ списка</div>'
+              if spec["we_absent"] else "")
+    head = (
+        "<thead><tr>"
+        '<th class="num">№</th><th>Код</th><th class="num">Приор</th>'
+        f"<th>{esc(flag_hdr)}</th>"
+        '<th class="num">ВИ</th><th class="num">ИД</th><th class="num">Σбалл</th>'
+        "<th>Примечание</th></tr></thead>"
+    )
+    body = "".join(_neighbor_row(e, spec["our_codes"], paid) for e in spec["rows"])
+    return (
+        f'<section class="nb-sec"><h2>{esc(spec["title"])}</h2>'
+        f'<div class="caption">список по состоянию на {esc(when)}</div>'
+        + banner
+        + '<div class="nb-scroll"><table class="nb">'
+        + head + "<tbody>" + body + "</tbody></table></div>"
+        + "</section>"
+    )
+
+
+def build_neighbors_html(specs, now=None) -> str:
+    """docs/mirea-list.html — «окружение»: для каждого track_neighbors конкурса
+    таблица «все на нашем месте и выше + 10 после», раскладка офсайта, наша строка
+    подсвечена, коды показаны полностью."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    sections = "".join(_neighbor_section(s, now) for s in specs) or \
+        '<p class="empty">Нет отслеживаемых списков.</p>'
+    links = _LINK_CARDS + " " + _LINK_TABLE
+    return (
+        "<!doctype html>\n"
+        '<html lang="ru"><head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="robots" content="noindex, nofollow">\n'
+        "<title>ВУЗ-мониторинг · окружение</title>\n"
+        f"<style>{_NEIGHBORS_STYLE}</style>\n"
+        "</head><body>\n"
+        '<div class="wrap">\n'
+        '<div class="topbar"><div class="summary"><b>Окружение в списке</b> · '
+        + links + "</div></div>\n"
+        f"{sections}\n"
+        '<footer class="foot">обновляется каждый час · один конкурс · vuz_monitor</footer>\n'
+        "</div>\n</body></html>\n"
+    )
+
+
+_NEIGHBORS_STYLE = """
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1a1d21;--muted:#6b7280;--border:#e5e7eb;--green:#15803d;--amber:#b45309;--accent:#2563eb;--you:#fef9c3;--row-green:rgba(34,197,94,.10);--row-amber:rgba(245,158,11,.12);}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--fg:#e6e8eb;--muted:#9aa4b2;--border:#252b33;--green:#4ade80;--amber:#fbbf24;--accent:#60a5fa;--you:#3f3a12;--row-green:rgba(34,197,94,.13);--row-amber:rgba(245,158,11,.13);}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);line-height:1.4;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:900px;margin:0 auto;padding:12px;}
+.topbar{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--border);padding:8px 0;margin-bottom:12px;z-index:5;}
+.summary{font-size:14px;}
+.page-link{color:var(--accent);text-decoration:none;margin-left:8px;font-size:13px;}
+.nb-sec{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px;}
+.nb-sec h2{font-size:16px;margin:0 0 2px;}
+.caption{font-size:12px;color:var(--muted);margin-bottom:10px;}
+.banner{font-size:13px;background:var(--you);border-radius:8px;padding:8px 10px;margin-bottom:10px;}
+.nb-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+table.nb{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px;}
+.nb th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;border-bottom:1px solid var(--border);padding:6px 8px;white-space:nowrap;}
+.nb td{padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap;}
+.nb .num{text-align:right;}
+.nb th.num{text-align:right;}
+.nb td.code{font-variant-numeric:tabular-nums;}
+.nb tbody tr.pass-real{background:var(--row-green);}
+.nb tbody tr.pass-main{background:var(--row-amber);}
+.nb tbody tr.you{background:var(--you);font-weight:600;}
+.foot{font-size:11px;color:var(--muted);text-align:center;margin-top:16px;}
+.empty{color:var(--muted);}
+"""
+
+
 _LEGEND = (
     '<details class="legend">'
     "<summary>Что такое ВП · обозначения</summary>"

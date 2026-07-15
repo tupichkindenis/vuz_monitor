@@ -115,3 +115,62 @@ def test_gather_ignores_unflagged_watch():
     specs = dashboard._gather_neighbors(cfg, store)
     store.close()
     assert specs == []
+
+
+# --- build_neighbors_html --- #
+def _spec(rows, our_codes=("1366129",), paid=True, we_absent=False,
+          title="1. Интеллектуальные системы", updated_at="2026-07-15 09:46:00"):
+    return {"title": title, "updated_at": updated_at, "fetched_at": NOW.isoformat(),
+            "paid": paid, "our_codes": {normalize_code(c) for c in our_codes},
+            "we_absent": we_absent, "rows": rows}
+
+
+def _import_norm():
+    from vuz_monitor.models import normalize_code
+    return normalize_code
+
+
+normalize_code = _import_norm()
+
+
+def test_render_highlights_our_row_and_shows_full_code():
+    rows = [_ent(1, "1366129", final_score=258.0), _ent(2, "1179201", final_score=256.0)]
+    html = dashboard.build_neighbors_html([_spec(rows)], now=NOW)
+    assert 'class="you"' in html          # our row highlighted
+    assert "◄ вы" in html                 # marker
+    assert "1366129" in html              # full code, NOT masked
+    assert "•••6129" not in html
+    assert 'content="noindex' in html and "<!doctype html>" in html
+
+
+def test_render_paid_vs_budget_column_header():
+    rows = [_ent(1, "1366129")]
+    paid_html = dashboard.build_neighbors_html([_spec(rows, paid=True)], now=NOW)
+    budget_html = dashboard.build_neighbors_html([_spec(rows, paid=False)], now=NOW)
+    assert "Платн" in paid_html
+    assert "Согл" in budget_html
+
+
+def test_render_note_mapping():
+    rows = [
+        _ent(1, "1366129", passing_real=True),                    # → планируется к зачислению
+        _ent(2, "222", passing_real=False, passing_main=True),    # → amber row, note «—»
+        _ent(3, "333", passing_real=None, passing_main=None),     # → note «—»
+    ]
+    html = dashboard.build_neighbors_html([_spec(rows)], now=NOW)
+    assert html.count("планируется к зачислению") == 1   # only the passing_real row
+    assert "pass-main" in html                           # amber row present
+
+
+def test_render_scores_and_missing():
+    rows = [_ent(1, "1366129", entrance_score=255.0, achievement_score=3.0, final_score=258.0),
+            _ent(2, "222", entrance_score=None, achievement_score=None, final_score=None)]
+    html = dashboard.build_neighbors_html([_spec(rows)], now=NOW)
+    assert "255" in html and "258" in html   # real values shown
+    assert "—" in html                       # None → dash
+
+
+def test_render_absent_banner():
+    rows = [_ent(1, "1000001"), _ent(2, "1000002")]
+    html = dashboard.build_neighbors_html([_spec(rows, we_absent=True)], now=NOW)
+    assert "вашего кода нет в этом списке" in html
