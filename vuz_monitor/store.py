@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -71,6 +72,12 @@ class Store:
                    PRIMARY KEY (source, ts)
                )"""
         )
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS notified_snapshot (
+                   watch_id TEXT PRIMARY KEY,
+                   payload  TEXT NOT NULL
+               )"""
+        )
         self.conn.commit()
 
     def load_prev(self, watch_id: str) -> Optional[Snapshot]:
@@ -112,6 +119,42 @@ class Store:
                         WHERE watch_id = ? ORDER BY fetched_at DESC LIMIT ?
                    )""",
             (watch_id, watch_id, keep),
+        )
+
+    @contextmanager
+    def transaction(self):
+        """Commit on success, roll back on exception. Wrap a group's promotes."""
+        try:
+            yield
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def load_notified_snapshot(self, watch_id: str) -> Optional[Snapshot]:
+        row = self.conn.execute(
+            "SELECT payload FROM notified_snapshot WHERE watch_id=?", (watch_id,)
+        ).fetchone()
+        return snapshot_from_dict(json.loads(row[0])) if row else None
+
+    def save_notified_snapshot(self, snap: Snapshot) -> None:
+        """Set a watch's delivered baseline to `snap` (used for migration seeding)."""
+        self.conn.execute(
+            "INSERT INTO notified_snapshot (watch_id, payload) VALUES (?, ?) "
+            "ON CONFLICT(watch_id) DO UPDATE SET payload=excluded.payload",
+            (snap.watch_id, json.dumps(snapshot_to_dict(snap), ensure_ascii=False)),
+        )
+        self.conn.commit()
+
+    def promote_notified(self, watch_id: str) -> None:
+        """Set the delivered baseline to this watch's latest saved snapshot.
+        Does NOT commit — call inside `transaction()` so a group commits atomically."""
+        self.conn.execute(
+            """INSERT INTO notified_snapshot (watch_id, payload)
+                 SELECT watch_id, payload FROM snapshots
+                  WHERE watch_id=? ORDER BY fetched_at DESC LIMIT 1
+               ON CONFLICT(watch_id) DO UPDATE SET payload=excluded.payload""",
+            (watch_id,),
         )
 
     def get_meta(self, key: str) -> Optional[str]:
