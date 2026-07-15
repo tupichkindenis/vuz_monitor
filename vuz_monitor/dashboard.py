@@ -956,8 +956,9 @@ def _neighbor_section(spec, now) -> str:
 
 def build_neighbors_html(specs, now=None, link_scores=False) -> str:
     """docs/mirea-list.html — «окружение»: для каждого track_neighbors конкурса
-    таблица «все на нашем месте и выше + 10 после», раскладка офсайта, наша строка
-    подсвечена, коды показаны полностью."""
+    таблица только тех, кто выполнил условия («соблюдены условия для платного» =
+    consent) и активен, со сквозной нумерацией 1..N — раскладка офсайта, наша
+    строка подсвечена, коды показаны полностью."""
     if now is None:
         now = datetime.now(timezone.utc)
     elif now.tzinfo is None:
