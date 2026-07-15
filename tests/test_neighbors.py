@@ -147,8 +147,8 @@ def test_render_paid_vs_budget_column_header():
     rows = [_ent(1, "1366129")]
     paid_html = dashboard.build_neighbors_html([_spec(rows, paid=True)], now=NOW)
     budget_html = dashboard.build_neighbors_html([_spec(rows, paid=False)], now=NOW)
-    assert "Платн" in paid_html
-    assert "Согл" in budget_html
+    assert "Платн" in paid_html and "Согл" not in paid_html
+    assert "Согл" in budget_html and "Платн" not in budget_html
 
 
 def test_render_note_mapping():
@@ -166,8 +166,10 @@ def test_render_scores_and_missing():
     rows = [_ent(1, "1366129", entrance_score=255.0, achievement_score=3.0, final_score=258.0),
             _ent(2, "222", entrance_score=None, achievement_score=None, final_score=None)]
     html = dashboard.build_neighbors_html([_spec(rows)], now=NOW)
-    assert "255" in html and "258" in html   # real values shown
-    assert "—" in html                       # None → dash
+    assert '<td class="num">255</td>' in html   # entrance shown via g
+    assert '<td class="num">258</td>' in html   # final shown via g
+    assert "—" in html                          # None scores → dash
+    assert "None" not in html                   # g used, never str(None)
 
 
 def test_render_absent_banner():
