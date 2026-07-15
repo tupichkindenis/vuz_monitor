@@ -112,6 +112,48 @@ def test_gather_empty_when_none_eligible():
     assert specs[0]["we_absent"] is True
 
 
+def test_gather_budget_filters_by_passing_real():
+    # budget watch: filter is passing_real (iHPO), NOT consent
+    ents = [
+        _ent(1, "1000001", passing_real=False, consent=True),   # consent but not passing → excluded
+        _ent(2, "1366129", passing_real=True, consent=False),   # us, passing → included
+        _ent(3, "1000003", passing_real=True, consent=False),
+    ]
+    cfg, store, _ = _mk(ents, group="МИРЭА — бюджет")
+    specs = dashboard._gather_neighbors(cfg, store)
+    store.close()
+    assert specs[0]["paid"] is False
+    assert [e.code for e in specs[0]["rows"]] == ["1366129", "1000003"]  # passing_real only, place order
+    assert specs[0]["we_absent"] is False
+
+
+def test_gather_budget_excludes_inactive():
+    ents = [
+        _ent(1, "1366129", passing_real=True, is_active=True),
+        _ent(2, "1000002", passing_real=True, is_active=False),  # passing but inactive → excluded
+        _ent(3, "1000003", passing_real=True, is_active=True),
+    ]
+    cfg, store, _ = _mk(ents, group="МИРЭА — бюджет")
+    specs = dashboard._gather_neighbors(cfg, store)
+    store.close()
+    assert [e.code for e in specs[0]["rows"]] == ["1366129", "1000003"]
+
+
+def test_gather_paid_still_filters_by_consent_not_passing_real():
+    # paid watch unchanged: consent decides, passing_real is ignored
+    ents = [
+        _ent(1, "1000001", consent=True, passing_real=False),   # consent → included
+        _ent(2, "1366129", consent=False, passing_real=True),   # passing but no consent → EXCLUDED
+        _ent(3, "1000003", consent=True, passing_real=True),
+    ]
+    cfg, store, _ = _mk(ents, group="МИРЭА — платно")
+    specs = dashboard._gather_neighbors(cfg, store)
+    store.close()
+    assert specs[0]["paid"] is True
+    assert [e.code for e in specs[0]["rows"]] == ["1000001", "1000003"]  # us excluded (no consent)
+    assert specs[0]["we_absent"] is True
+
+
 def test_gather_paid_flag_from_group():
     ents = [_ent(1, "1366129")]
     cfg_p, store_p, _ = _mk(ents, group="МИРЭА — платно")

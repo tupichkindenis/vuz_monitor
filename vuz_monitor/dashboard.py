@@ -127,10 +127,11 @@ def _gather_score_progress(config, store):
 def _gather_neighbors(config, store):
     """One spec dict per `track_neighbors` competition that has a snapshot:
     {title, updated_at, fetched_at, paid, our_codes, we_absent, rows}. `rows` is the
-    FULL list of applicants who meet the paid conditions (`consent` = API `accepted`)
-    and are active (`is_active`), in place order — the official «Соблюдены условия для
-    платного» filtered view, renumbered 1..N at render time. When our code is not among
-    them, `we_absent=True` (rows still hold the full eligible list)."""
+    FULL filtered list of active applicants in place order, renumbered 1..N at render
+    time. The filter depends on competition type: paid → `consent` (API `accepted`,
+    «Соблюдены условия для платного»); budget → `passing_real` (API `iHPO`,
+    «Проходной ВП»). When our code is not among them, `we_absent=True` (rows still
+    hold the full eligible list)."""
     specs = []
     for w in config.watches:
         if not w.track_neighbors:
@@ -140,9 +141,11 @@ def _gather_neighbors(config, store):
             continue
         title = snap.meta.title if (snap.meta and snap.meta.title) else w.name
         our_codes = {normalize_code(c) for c in config.resolve_codes(w)}
+        paid = is_paid(title) or is_paid(w.group or w.name)
+        ok = (lambda e: e.consent) if paid else (lambda e: e.passing_real)
         eligible = sorted(
             [e for e in snap.entrants
-             if e.place is not None and e.consent and e.is_active],
+             if e.place is not None and e.is_active and ok(e)],
             key=lambda e: e.place,
         )
         we_absent = not any(e.code in our_codes for e in eligible)
@@ -150,7 +153,7 @@ def _gather_neighbors(config, store):
             "title": title,
             "updated_at": snap.meta.updated_at if snap.meta else None,
             "fetched_at": snap.fetched_at,
-            "paid": is_paid(title) or is_paid(w.group or w.name),
+            "paid": paid,
             "our_codes": our_codes,
             "we_absent": we_absent,
             "rows": eligible,
