@@ -204,3 +204,12 @@ def test_diff_is_against_delivered_baseline_not_last_snapshot(monkeypatch, tmp_p
     rep = pipeline._process_watch(w, _cfg([w]), store, dry_run=False)
     # 5 -> 3 vs the DELIVERED baseline is a change; diffing vs prev(3) would wrongly say "no change".
     assert rep.has_changes is True
+
+
+def test_dry_run_does_not_seed_notified_baseline(monkeypatch, tmp_path):
+    store = Store(str(tmp_path / "s.db"))
+    w = _watch()
+    store.save(_snap(w.watch_id, place=5))                 # prior history exists (migration candidate)
+    _patch_adapter(monkeypatch, _snap(w.watch_id, place=5))
+    pipeline._process_watch(w, _cfg([w]), store, dry_run=True)
+    assert store.load_notified_snapshot(w.watch_id) is None   # dry-run must not persist the seed

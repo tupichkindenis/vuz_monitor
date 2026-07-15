@@ -2,7 +2,6 @@ import errno
 import httpx
 
 from vuz_monitor.config import WatchConfig, AppConfig, TelegramConfig
-from vuz_monitor.store import Store
 from vuz_monitor import pipeline
 
 
@@ -26,7 +25,7 @@ def _patch_all_fail(monkeypatch, exc):
     monkeypatch.setattr(pipeline, "_render_dashboard", lambda *a, **k: [])  # hermetic: no docs/ writes
 
 
-def test_gate_fires_when_all_connectivity_across_two_hosts(monkeypatch, tmp_path):
+def test_gate_fires_when_all_connectivity_across_two_hosts(monkeypatch):
     sent = []
     monkeypatch.setattr(pipeline.notify, "send_message", lambda *a, **k: sent.append(a))
     _patch_all_fail(monkeypatch, _conn_err())
@@ -35,7 +34,7 @@ def test_gate_fires_when_all_connectivity_across_two_hosts(monkeypatch, tmp_path
     assert rc == 0 and sent == []            # nothing sent
 
 
-def test_gate_does_not_fire_single_host(monkeypatch, tmp_path):
+def test_gate_does_not_fire_single_host(monkeypatch):
     sent = []
     monkeypatch.setattr(pipeline.notify, "send_message", lambda *a, **k: sent.append(a))
     _patch_all_fail(monkeypatch, _conn_err())
@@ -44,7 +43,7 @@ def test_gate_does_not_fire_single_host(monkeypatch, tmp_path):
     assert sent != []                        # one host → gate off → error message attempted
 
 
-def test_gate_off_in_dry_run(monkeypatch, capsys, tmp_path):
+def test_gate_off_in_dry_run(monkeypatch, capsys):
     _patch_all_fail(monkeypatch, _conn_err())
     cfg = _cfg([_watch("a", "https://host.one/x"), _watch("b", "https://host.two/x")])
     pipeline.run(cfg, dry_run=True)

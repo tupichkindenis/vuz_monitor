@@ -1,5 +1,3 @@
-import httpx
-
 from vuz_monitor.config import WatchConfig, AppConfig, TelegramConfig
 from vuz_monitor.store import Store
 from vuz_monitor import pipeline
@@ -54,3 +52,28 @@ def test_baseline_held_when_send_fails(monkeypatch, tmp_path):
         raise pipeline.notify.TelegramNetworkError("unreachable")
     _run_with_change(monkeypatch, db, w, _fail)
     assert Store(db).load_notified_snapshot(w.watch_id).entrants[0].place == 5   # held → re-alerts
+
+
+def test_later_group_held_when_it_fails_after_earlier_delivers(monkeypatch, tmp_path):
+    db = str(tmp_path / "s.db")
+    wa = WatchConfig(name="a", adapter="fake", url="https://h/a", params={"k": "a"}, codes=["100"], group="GA")
+    wb = WatchConfig(name="b", adapter="fake", url="https://h/b", params={"k": "b"}, codes=["100"], group="GB")
+    seed = Store(db)
+    seed.save_notified_snapshot(_snap(wa.watch_id, 5)); seed.save_notified_snapshot(_snap(wb.watch_id, 5)); seed.close()
+    class _A:
+        def fetch(self, watch): return _snap(watch.watch_id, 2)
+    monkeypatch.setattr(pipeline, "get_adapter", lambda name: _A())
+    monkeypatch.setattr(pipeline, "_render_dashboard", lambda *a, **k: [])
+    calls = {"n": 0}
+    def _send(token, chat, msg):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise pipeline.notify.TelegramNetworkError("down")
+    monkeypatch.setattr(pipeline.notify, "send_message", _send)
+    cfg = AppConfig(telegram=TelegramConfig(chat_id="1", bot_token="t"),
+                    heartbeat="on_change_only", tracked_codes=["100"], watches=[wa, wb], db_path=db)
+    pipeline.run(cfg, dry_run=False)
+    store = Store(db)
+    assert store.load_notified_snapshot(wa.watch_id).entrants[0].place == 2   # earlier group delivered
+    assert store.load_notified_snapshot(wb.watch_id).entrants[0].place == 5   # later group held
+    store.close()

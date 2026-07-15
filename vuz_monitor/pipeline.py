@@ -49,7 +49,8 @@ def _process_watch(
     # seed it from the last snapshot so we don't re-announce «первый запуск».
     baseline = store.load_notified_snapshot(watch.watch_id)
     if baseline is None and prev is not None:
-        store.save_notified_snapshot(prev)
+        if not dry_run:
+            store.save_notified_snapshot(prev)   # migration seed: persist only on a real run
         baseline = prev
 
     code_reports = []
@@ -240,7 +241,7 @@ def run(config: AppConfig, dry_run: bool = False) -> int:
                 for msg in notify.build_messages([(name, greports)]):
                     notify.send_message(config.telegram.bot_token, config.telegram.chat_id, msg)
             except notify.TelegramNetworkError:
-                log.warning("Telegram unreachable; stopped after earlier group(s); will re-alert next run")
+                log.warning("Telegram unreachable; holding this and later groups for next run")
                 delivered_all = False
                 break
             # Group delivered → advance its watches' delivered baseline, atomically.

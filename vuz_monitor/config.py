@@ -107,12 +107,13 @@ def load_config(path: str = "config.yaml") -> AppConfig:
 
     seen: dict[str, str] = {}
     for w in watches:
-        if w.watch_id in seen:
+        wid = w.watch_id
+        if wid in seen:
             raise ValueError(
-                f"Duplicate watch_id {w.watch_id!r}: {seen[w.watch_id]!r} and {w.name!r} "
+                f"Duplicate watch_id {wid!r}: {seen[wid]!r} and {w.name!r} "
                 "resolve to the same adapter+url+params. Give them distinct url or params."
             )
-        seen[w.watch_id] = w.name
+        seen[wid] = w.name
 
     return AppConfig(
         telegram=telegram,
