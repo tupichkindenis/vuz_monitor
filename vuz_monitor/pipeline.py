@@ -204,6 +204,17 @@ def run(config: AppConfig, dry_run: bool = False) -> int:
             except Exception as exc:
                 log.warning("dashboard generation failed: %s", exc)
 
+        # Every watch failed on OUR connectivity, across ≥2 independent hosts →
+        # the local machine was offline, not the sources. Say nothing; don't crash.
+        if not dry_run:
+            hosts = {r.host for r in reports if r.host}
+            if reports and all(r.error and r.net_error for r in reports) and len(hosts) >= 2:
+                log.warning(
+                    "local network down: %d watches unreachable across %d hosts; skipping send",
+                    len(reports), len(hosts),
+                )
+                return 0
+
         mode = (config.heartbeat or "always").lower()
         # Decide per group; send the FULL group (all specialties) when any changed.
         groups = [
