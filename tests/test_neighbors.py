@@ -50,43 +50,66 @@ def _mk(entrants, tracked="1366129", track=True, group="МИРЭА — плат�
 
 
 # --- _gather_neighbors --- #
-def test_gather_window_ahead_self_and_10_after():
-    ents = [_ent(p, 1000000 + p) for p in range(1, 21)]     # places 1..20
-    ents[4] = _ent(5, "1366129")                            # our code at place 5
+def test_gather_filters_by_consent():
+    # places 1..6; only some gave consent (=accepted). Our code among them.
+    ents = [
+        _ent(1, "1000001", consent=False),
+        _ent(2, "1366129", consent=True),   # us, eligible
+        _ent(3, "1000003", consent=True),
+        _ent(4, "1000004", consent=False),
+        _ent(5, "1000005", consent=True),
+        _ent(6, "1000006", consent=False),
+    ]
     cfg, store, _ = _mk(ents)
     specs = dashboard._gather_neighbors(cfg, store)
     store.close()
-    assert len(specs) == 1
     rows = specs[0]["rows"]
-    assert [e.place for e in rows] == list(range(1, 16))    # 1..5 (self+ahead) + 6..15 (10 after)
+    assert [e.code for e in rows] == ["1366129", "1000003", "1000005"]  # consent only, place order
     assert specs[0]["we_absent"] is False
 
 
-def test_gather_we_are_first():
-    ents = [_ent(p, 1000000 + p) for p in range(1, 21)]
-    ents[0] = _ent(1, "1366129")
+def test_gather_filters_by_is_active():
+    ents = [
+        _ent(1, "1366129", consent=True, is_active=True),
+        _ent(2, "1000002", consent=True, is_active=False),   # consent but inactive → excluded
+        _ent(3, "1000003", consent=True, is_active=True),
+    ]
     cfg, store, _ = _mk(ents)
     specs = dashboard._gather_neighbors(cfg, store)
     store.close()
-    assert [e.place for e in specs[0]["rows"]] == list(range(1, 12))   # self + 10 after = 11 rows
+    assert [e.code for e in specs[0]["rows"]] == ["1366129", "1000003"]
 
 
-def test_gather_fewer_than_10_after():
-    ents = [_ent(p, 1000000 + p) for p in range(1, 9)]      # places 1..8
-    ents[4] = _ent(5, "1366129")                            # our code at place 5
+def test_gather_full_list_no_window_cap():
+    # 15 eligible below us → all shown (no 10-cap). We are place 1.
+    ents = [_ent(1, "1366129", consent=True)]
+    ents += [_ent(p, 1000000 + p, consent=True) for p in range(2, 17)]  # places 2..16
     cfg, store, _ = _mk(ents)
     specs = dashboard._gather_neighbors(cfg, store)
     store.close()
-    assert [e.place for e in specs[0]["rows"]] == [1, 2, 3, 4, 5, 6, 7, 8]  # only 3 after exist
+    assert len(specs[0]["rows"]) == 16   # full eligible list, not 11
 
 
-def test_gather_absent_code_falls_back_to_top11():
-    ents = [_ent(p, 1000000 + p) for p in range(1, 21)]     # our code NOT here
+def test_gather_we_absent_when_our_consent_false():
+    ents = [
+        _ent(1, "1000001", consent=True),
+        _ent(2, "1366129", consent=False),   # us, NOT eligible
+        _ent(3, "1000003", consent=True),
+    ]
     cfg, store, _ = _mk(ents)
     specs = dashboard._gather_neighbors(cfg, store)
     store.close()
     assert specs[0]["we_absent"] is True
-    assert [e.place for e in specs[0]["rows"]] == list(range(1, 12))   # top 11
+    assert [e.code for e in specs[0]["rows"]] == ["1000001", "1000003"]  # us excluded
+
+
+def test_gather_empty_when_none_eligible():
+    ents = [_ent(1, "1366129", consent=False), _ent(2, "1000002", consent=False)]
+    cfg, store, _ = _mk(ents)
+    specs = dashboard._gather_neighbors(cfg, store)
+    store.close()
+    assert specs[0]["rows"] == []          # spec still present (page still generated)
+    assert specs[0]["we_absent"] is True
 
 
 def test_gather_paid_flag_from_group():
@@ -215,16 +238,3 @@ def test_scores_and_list_pages_cross_link_bidirectionally():
     assert "mirea-list.html" in pages and "mirea-scores.html" in pages
     assert 'href="mirea-scores.html"' in pages["mirea-list.html"]   # list → scores
     assert 'href="mirea-list.html"' in pages["mirea-scores.html"]   # scores → list
-
-
-def test_gather_multi_code_window_anchors_on_min_place():
-    ents = [_ent(p, 1000000 + p) for p in range(1, 21)]   # places 1..20
-    ents[9] = _ent(10, "1366129")   # one tracked code at place 10
-    ents[4] = _ent(5, "9999999")    # another tracked code at the better place 5
-    cfg, store, _ = _mk(ents, tracked="1366129")
-    cfg.tracked_codes.append("9999999")                   # track both codes
-    specs = dashboard._gather_neighbors(cfg, store)
-    store.close()
-    # window anchors on the BETTER (min) place = 5 → rows 1..5 (ahead+self) + 6..15 (next 10)
-    assert [e.place for e in specs[0]["rows"]] == list(range(1, 16))
-    assert specs[0]["we_absent"] is False

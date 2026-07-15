@@ -124,15 +124,13 @@ def _gather_score_progress(config, store):
     return specs
 
 
-NEIGHBORS_AFTER = 10  # how many rows to show below our own place
-
-
 def _gather_neighbors(config, store):
     """One spec dict per `track_neighbors` competition that has a snapshot:
     {title, updated_at, fetched_at, paid, our_codes, we_absent, rows}. `rows` is the
-    window «все на нашем месте и выше + следующие NEIGHBORS_AFTER», in place order.
-    When our code is absent from the list, `we_absent=True` and `rows` is the top
-    (NEIGHBORS_AFTER + 1)."""
+    FULL list of applicants who meet the paid conditions (`consent` = API `accepted`)
+    and are active (`is_active`), in place order — the official «Соблюдены условия для
+    платного» filtered view, renumbered 1..N at render time. When our code is not among
+    them, `we_absent=True` (rows still hold the full eligible list)."""
     specs = []
     for w in config.watches:
         if not w.track_neighbors:
@@ -142,20 +140,12 @@ def _gather_neighbors(config, store):
             continue
         title = snap.meta.title if (snap.meta and snap.meta.title) else w.name
         our_codes = {normalize_code(c) for c in config.resolve_codes(w)}
-        ranked = sorted(
-            [e for e in snap.entrants if e.place is not None],
+        eligible = sorted(
+            [e for e in snap.entrants
+             if e.place is not None and e.consent and e.is_active],
             key=lambda e: e.place,
         )
-        our_places = [e.place for e in ranked if e.code in our_codes]
-        if our_places:
-            cutoff = min(our_places)
-            ahead_and_self = [e for e in ranked if e.place <= cutoff]
-            after = [e for e in ranked if e.place > cutoff][:NEIGHBORS_AFTER]
-            rows = ahead_and_self + after
-            we_absent = False
-        else:
-            rows = ranked[: NEIGHBORS_AFTER + 1]
-            we_absent = True
+        we_absent = not any(e.code in our_codes for e in eligible)
         specs.append({
             "title": title,
             "updated_at": snap.meta.updated_at if snap.meta else None,
@@ -163,7 +153,7 @@ def _gather_neighbors(config, store):
             "paid": is_paid(title) or is_paid(w.group or w.name),
             "our_codes": our_codes,
             "we_absent": we_absent,
-            "rows": rows,
+            "rows": eligible,
         })
     return specs
 
