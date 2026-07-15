@@ -35,6 +35,8 @@ class WatchConfig:
     group: Optional[str] = None
     # build the score-loading tracker (docs/mirea-scores.html) for this competition.
     track_scores: bool = False
+    # build the neighbors list page (docs/mirea-list.html) for this competition.
+    track_neighbors: bool = False
     # html_table adapter specifics
     table_selector: Optional[str] = None
     columns: Optional[dict] = None
@@ -99,6 +101,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                 code_field=w.get("code_field") or raw.get("code_field"),
                 group=w.get("group") or raw.get("group"),
                 track_scores=bool(w.get("track_scores", False)),
+                track_neighbors=bool(w.get("track_neighbors", False)),
                 table_selector=w.get("table_selector"),
                 columns=w.get("columns"),
                 encoding=w.get("encoding"),

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from .diff import compute_status
 from .format import esc, fmt_source_time, g, is_paid, mask_code, pass_real, split_group, yesno
+from .models import normalize_code
 from .report import BUCKET_WIDTH, CodeReport, WatchReport, group_reports
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -67,17 +68,24 @@ def generate_table(config, store, now=None) -> str:
 
 def render_pages(config, store, now=None) -> dict:
     """All pages from a single state.db pass: {filename: html}. The score-loading
-    page (mirea-scores.html) is included only when a `track_scores` competition has
-    recorded history."""
+    page (mirea-scores.html) and the neighbors page (mirea-list.html) are included
+    only when their feature has data for at least one competition."""
     groups, history = _gather(config, store)
     specs = _gather_score_progress(config, store)
+    neighbors = _gather_neighbors(config, store)
     has_scores = bool(specs)
+    has_neighbors = bool(neighbors)
     pages = {
-        "index.html": build_html(groups, history, now=now, link_scores=has_scores),
-        "table.html": build_table_html(groups, history, now=now, link_scores=has_scores),
+        "index.html": build_html(groups, history, now=now,
+                                 link_scores=has_scores, link_neighbors=has_neighbors),
+        "table.html": build_table_html(groups, history, now=now,
+                                       link_scores=has_scores, link_neighbors=has_neighbors),
     }
     if has_scores:
-        pages["mirea-scores.html"] = build_score_progress_html(specs, now=now)
+        pages["mirea-scores.html"] = build_score_progress_html(specs, now=now,
+                                                               link_neighbors=has_neighbors)
+    if has_neighbors:
+        pages["mirea-list.html"] = build_neighbors_html(neighbors, now=now, link_scores=has_scores)
     return pages
 
 
@@ -113,6 +121,50 @@ def _gather_score_progress(config, store):
                 }
                 break
         specs.append({"title": title, "history": history, "tracked": tracked})
+    return specs
+
+
+NEIGHBORS_AFTER = 10  # how many rows to show below our own place
+
+
+def _gather_neighbors(config, store):
+    """One spec dict per `track_neighbors` competition that has a snapshot:
+    {title, updated_at, fetched_at, paid, our_codes, we_absent, rows}. `rows` is the
+    window «все на нашем месте и выше + следующие NEIGHBORS_AFTER», in place order.
+    When our code is absent from the list, `we_absent=True` and `rows` is the top
+    (NEIGHBORS_AFTER + 1)."""
+    specs = []
+    for w in config.watches:
+        if not w.track_neighbors:
+            continue
+        snap = store.load_prev(w.watch_id)
+        if snap is None:
+            continue
+        title = snap.meta.title if (snap.meta and snap.meta.title) else w.name
+        our_codes = {normalize_code(c) for c in config.resolve_codes(w)}
+        ranked = sorted(
+            [e for e in snap.entrants if e.place is not None],
+            key=lambda e: e.place,
+        )
+        our_places = [e.place for e in ranked if e.code in our_codes]
+        if our_places:
+            cutoff = min(our_places)
+            ahead_and_self = [e for e in ranked if e.place <= cutoff]
+            after = [e for e in ranked if e.place > cutoff][:NEIGHBORS_AFTER]
+            rows = ahead_and_self + after
+            we_absent = False
+        else:
+            rows = ranked[: NEIGHBORS_AFTER + 1]
+            we_absent = True
+        specs.append({
+            "title": title,
+            "updated_at": snap.meta.updated_at if snap.meta else None,
+            "fetched_at": snap.fetched_at,
+            "paid": is_paid(title) or is_paid(w.group or w.name),
+            "our_codes": our_codes,
+            "we_absent": we_absent,
+            "rows": rows,
+        })
     return specs
 
 
@@ -345,6 +397,7 @@ def _group_section(name, reports, history, now, vuz, osnova) -> str:
 _LINK_TABLE = '<a class="page-link" href="table.html">▦ таблица</a>'
 _LINK_CARDS = '<a class="page-link" href="index.html">☰ карточки</a>'
 _LINK_SCORES = '<a class="page-link" href="mirea-scores.html">📊 баллы</a>'
+_LINK_LIST = '<a class="page-link" href="mirea-list.html">👥 окружение</a>'
 
 
 def _summary(groups) -> dict:
@@ -386,7 +439,7 @@ def _summary_bar(groups, now, link_html: str = "") -> str:
     )
 
 
-def build_html(groups, history, now=None, link_scores=False) -> str:
+def build_html(groups, history, now=None, link_scores=False, link_neighbors=False) -> str:
     """Render the full page. `groups` = group_reports() output; `history` =
     {(watch_id, code_display): [daily points]}."""
     if now is None:
@@ -421,7 +474,9 @@ def build_html(groups, history, now=None, link_scores=False) -> str:
         "</head><body>\n"
         '<div class="wrap">\n'
         '<div class="topbar">'
-        + _summary_bar(groups, now, _LINK_TABLE + (" " + _LINK_SCORES if link_scores else ""))
+        + _summary_bar(groups, now, _LINK_TABLE
+                       + (" " + _LINK_SCORES if link_scores else "")
+                       + (" " + _LINK_LIST if link_neighbors else ""))
         + filters
         + "</div>\n"
         + _LEGEND + "\n"
@@ -539,7 +594,7 @@ _TABLE_HEADERS = [
 ]
 
 
-def build_table_html(groups, history, now=None, link_scores=False) -> str:
+def build_table_html(groups, history, now=None, link_scores=False, link_neighbors=False) -> str:
     """Desktop one-table view: row = specialty, columns = all params, sortable,
     with ВУЗ/основа filter chips and a place-trend sparkline column."""
     if now is None:
@@ -578,7 +633,9 @@ def build_table_html(groups, history, now=None, link_scores=False) -> str:
         f"<style>{_TABLE_STYLE}</style>\n"
         "</head><body>\n"
         '<div class="wrap-wide">\n'
-        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS + (" " + _LINK_SCORES if link_scores else "")) + filters + "</div>\n"
+        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS
+            + (" " + _LINK_SCORES if link_scores else "")
+            + (" " + _LINK_LIST if link_neighbors else "")) + filters + "</div>\n"
         '<p class="no-match" hidden>Нет строк под выбранный фильтр.</p>\n'
         '<div class="table-scroll"><table id="grid"><thead><tr>'
         + thead + "</tr></thead><tbody>\n" + tbody + "\n</tbody></table></div>\n"
@@ -770,7 +827,7 @@ def _score_section(spec, now) -> str:
     )
 
 
-def build_score_progress_html(specialties, now=None) -> str:
+def build_score_progress_html(specialties, now=None, link_neighbors=False) -> str:
     """docs/mirea-scores.html — score-loading tracker: intraday comparison
     (конец вчера · 10:00 · 14:00 · 19:00 · Изменение), range distribution across
     the same slots, and a trend sparkline, per tracked competition."""
@@ -780,7 +837,7 @@ def build_score_progress_html(specialties, now=None) -> str:
         now = now.replace(tzinfo=timezone.utc)
     sections = "".join(_score_section(s, now) for s in specialties) or \
         '<p class="empty">Нет отслеживаемых конкурсов.</p>'
-    links = _LINK_CARDS + " " + _LINK_TABLE
+    links = _LINK_CARDS + " " + _LINK_TABLE + (" " + _LINK_LIST if link_neighbors else "")
     return (
         "<!doctype html>\n"
         '<html lang="ru"><head>\n'
@@ -831,6 +888,124 @@ tr.you{background:var(--you);}
 .spark-place polyline{stroke:var(--accent);stroke-width:1.6;fill:none;stroke-linejoin:round;stroke-linecap:round;}
 .spark-place circle{fill:var(--accent);}
 .spark-dash{color:var(--muted);font-size:12px;}
+.foot{font-size:11px;color:var(--muted);text-align:center;margin-top:16px;}
+.empty{color:var(--muted);}
+"""
+
+
+# --------------------------------------------------------------------------- #
+# Neighbors list page (docs/mirea-list.html)
+# --------------------------------------------------------------------------- #
+def _note(e) -> str:
+    """«Примечание» text from the official passing flags."""
+    if e.passing_real:
+        return "планируется к зачислению"
+    return "—"
+
+
+def _neighbor_row(e, our_codes, paid) -> str:
+    ours = e.code in our_codes
+    if ours:
+        tr_cls = "you"
+    elif e.passing_real:
+        tr_cls = "pass-real"
+    elif e.passing_main:
+        tr_cls = "pass-main"
+    else:
+        tr_cls = ""
+    num = f'{esc(e.place)}{" ◄ вы" if ours else ""}'
+    flag = e.paid_ok if paid else e.consent
+    cls_attr = f' class="{tr_cls}"' if tr_cls else ""
+    return (
+        f"<tr{cls_attr}>"
+        f'<td class="num">{num}</td>'
+        f'<td class="code">{esc(e.code_display)}</td>'
+        f'<td class="num">{esc(e.priority) if e.priority is not None else "—"}</td>'
+        f"<td>{esc(yesno(flag))}</td>"
+        f'<td class="num">{esc(g(e.entrance_score))}</td>'
+        f'<td class="num">{esc(g(e.achievement_score))}</td>'
+        f'<td class="num">{esc(g(e.final_score))}</td>'
+        f"<td>{esc(_note(e))}</td>"
+        "</tr>"
+    )
+
+
+def _neighbor_section(spec, now) -> str:
+    when = fmt_source_time(spec["updated_at"]) if spec["updated_at"] else _fetched_msk(spec["fetched_at"])
+    paid = spec["paid"]
+    flag_hdr = "Платн" if paid else "Согл"
+    banner = ('<div class="banner">вашего кода нет в этом списке — показан топ списка</div>'
+              if spec["we_absent"] else "")
+    head = (
+        "<thead><tr>"
+        '<th class="num">№</th><th>Код</th><th class="num">Приор</th>'
+        f"<th>{esc(flag_hdr)}</th>"
+        '<th class="num">ВИ</th><th class="num">ИД</th><th class="num">Σбалл</th>'
+        "<th>Примечание</th></tr></thead>"
+    )
+    body = "".join(_neighbor_row(e, spec["our_codes"], paid) for e in spec["rows"])
+    return (
+        f'<section class="nb-sec"><h2>{esc(spec["title"])}</h2>'
+        f'<div class="caption">список по состоянию на {esc(when)}</div>'
+        + banner
+        + '<div class="nb-scroll"><table class="nb">'
+        + head + "<tbody>" + body + "</tbody></table></div>"
+        + "</section>"
+    )
+
+
+def build_neighbors_html(specs, now=None, link_scores=False) -> str:
+    """docs/mirea-list.html — «окружение»: для каждого track_neighbors конкурса
+    таблица «все на нашем месте и выше + 10 после», раскладка офсайта, наша строка
+    подсвечена, коды показаны полностью."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    sections = "".join(_neighbor_section(s, now) for s in specs) or \
+        '<p class="empty">Нет отслеживаемых списков.</p>'
+    links = _LINK_CARDS + " " + _LINK_TABLE + (" " + _LINK_SCORES if link_scores else "")
+    return (
+        "<!doctype html>\n"
+        '<html lang="ru"><head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="robots" content="noindex, nofollow">\n'
+        "<title>ВУЗ-мониторинг · окружение</title>\n"
+        f"<style>{_NEIGHBORS_STYLE}</style>\n"
+        "</head><body>\n"
+        '<div class="wrap">\n'
+        '<div class="topbar"><div class="summary"><b>Окружение в списке</b> · '
+        + links + "</div></div>\n"
+        f"{sections}\n"
+        '<footer class="foot">обновляется каждый час · один конкурс · vuz_monitor</footer>\n'
+        "</div>\n</body></html>\n"
+    )
+
+
+_NEIGHBORS_STYLE = """
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1a1d21;--muted:#6b7280;--border:#e5e7eb;--green:#15803d;--amber:#b45309;--accent:#2563eb;--you:#fef9c3;--row-green:rgba(34,197,94,.10);--row-amber:rgba(245,158,11,.12);}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--fg:#e6e8eb;--muted:#9aa4b2;--border:#252b33;--green:#4ade80;--amber:#fbbf24;--accent:#60a5fa;--you:#3f3a12;--row-green:rgba(34,197,94,.13);--row-amber:rgba(245,158,11,.13);}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);line-height:1.4;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:900px;margin:0 auto;padding:12px;}
+.topbar{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--border);padding:8px 0;margin-bottom:12px;z-index:5;}
+.summary{font-size:14px;}
+.page-link{color:var(--accent);text-decoration:none;margin-left:8px;font-size:13px;}
+.nb-sec{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px;}
+.nb-sec h2{font-size:16px;margin:0 0 2px;}
+.caption{font-size:12px;color:var(--muted);margin-bottom:10px;}
+.banner{font-size:13px;background:var(--you);border-radius:8px;padding:8px 10px;margin-bottom:10px;}
+.nb-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+table.nb{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px;}
+.nb th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;border-bottom:1px solid var(--border);padding:6px 8px;white-space:nowrap;}
+.nb td{padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap;}
+.nb .num{text-align:right;}
+.nb th.num{text-align:right;}
+.nb td.code{font-variant-numeric:tabular-nums;}
+.nb tbody tr.pass-real{background:var(--row-green);}
+.nb tbody tr.pass-main{background:var(--row-amber);}
+.nb tbody tr.you{background:var(--you);font-weight:600;}
 .foot{font-size:11px;color:var(--muted);text-align:center;margin-top:16px;}
 .empty{color:var(--muted);}
 """
