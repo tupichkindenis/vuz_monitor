@@ -268,6 +268,51 @@ def test_render_absent_banner():
     assert "вашего кода нет среди выполнивших условия для платного" in html
 
 
+def test_render_section_label_paid_vs_budget():
+    rows = [_ent(1, "1366129", passing_real=True)]
+    paid_html = dashboard.build_neighbors_html([_spec(rows, paid=True)], now=NOW)
+    budget_html = dashboard.build_neighbors_html([_spec(rows, paid=False)], now=NOW)
+    assert "Платно ·" in paid_html and "Бюджет ·" not in paid_html
+    assert "Бюджет ·" in budget_html and "Платно ·" not in budget_html
+
+
+def test_render_budget_empty_message():
+    html = dashboard.build_neighbors_html([_spec([], paid=False, we_absent=True)], now=NOW)
+    assert "Пока никто не проходит по Проходному ВП" in html
+    assert "для платного" not in html
+
+
+def test_render_budget_absent_banner():
+    rows = [_ent(1, "1000001", passing_real=True), _ent(2, "1000002", passing_real=True)]
+    html = dashboard.build_neighbors_html([_spec(rows, paid=False, we_absent=True)], now=NOW)
+    assert "вашего кода нет среди проходящих по Проходному ВП" in html
+    assert "для платного" not in html
+
+
+def test_render_pages_budget_and_paid_sections_both_present():
+    store = Store(":memory:")
+    ts = NOW.isoformat()
+    wp = WatchConfig(name="ИСУ платно", adapter="mirea_api", url="http://p",
+                     group="МИРЭА — платно", track_neighbors=True)
+    wb = WatchConfig(name="ИСУ бюджет", adapter="mirea_api", url="http://b",
+                     group="МИРЭА — бюджет", track_neighbors=True)
+    store.save(Snapshot(watch_id=wp.watch_id,
+        meta=ProgramMeta(title="ИСУ / договор", plan=122, total=2, updated_at="2026-07-15 09:46:00"),
+        entrants=[_ent(1, "1366129", consent=True), _ent(2, "1179201", consent=True)], fetched_at=ts))
+    store.save(Snapshot(watch_id=wb.watch_id,
+        meta=ProgramMeta(title="ИСУ / общий", plan=11, total=2, updated_at="2026-07-15 09:46:00"),
+        entrants=[_ent(1, "1366129", passing_real=True), _ent(2, "1289372", passing_real=True)], fetched_at=ts))
+    cfg = AppConfig(telegram=TelegramConfig(chat_id="", bot_token=""),
+                    heartbeat="on_change_only", tracked_codes=["1366129"], watches=[wb, wp])
+    pages = dashboard.render_pages(cfg, store)
+    store.close()
+    html = pages["mirea-list.html"]
+    assert "Бюджет ·" in html and "Платно ·" in html            # both sections present
+    assert html.index("Бюджет ·") < html.index("Платно ·")      # budget first (config order: wb before wp)
+    assert "1289372" in html                                    # budget-only code shown
+    assert "1 ◄ вы" in html                                     # our row numbered sequentially
+
+
 # --- render_pages integration --- #
 def test_render_pages_includes_list_page_when_flagged():
     ents = [_ent(1, "1366129"), _ent(2, "1179201")]
