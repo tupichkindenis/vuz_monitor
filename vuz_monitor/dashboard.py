@@ -127,10 +127,11 @@ def _gather_score_progress(config, store):
 def _gather_neighbors(config, store):
     """One spec dict per `track_neighbors` competition that has a snapshot:
     {title, updated_at, fetched_at, paid, our_codes, we_absent, rows}. `rows` is the
-    FULL list of applicants who meet the paid conditions (`consent` = API `accepted`)
-    and are active (`is_active`), in place order — the official «Соблюдены условия для
-    платного» filtered view, renumbered 1..N at render time. When our code is not among
-    them, `we_absent=True` (rows still hold the full eligible list)."""
+    FULL filtered list of active applicants in place order, renumbered 1..N at render
+    time. The filter depends on competition type: paid → `consent` (API `accepted`,
+    «Соблюдены условия для платного»); budget → `passing_real` (API `iHPO`,
+    «Проходной ВП»). When our code is not among them, `we_absent=True` (rows still
+    hold the full eligible list)."""
     specs = []
     for w in config.watches:
         if not w.track_neighbors:
@@ -140,9 +141,11 @@ def _gather_neighbors(config, store):
             continue
         title = snap.meta.title if (snap.meta and snap.meta.title) else w.name
         our_codes = {normalize_code(c) for c in config.resolve_codes(w)}
+        paid = is_paid(title) or is_paid(w.group or w.name)
+        ok = (lambda e: e.consent) if paid else (lambda e: e.passing_real)
         eligible = sorted(
             [e for e in snap.entrants
-             if e.place is not None and e.consent and e.is_active],
+             if e.place is not None and e.is_active and ok(e)],
             key=lambda e: e.place,
         )
         we_absent = not any(e.code in our_codes for e in eligible)
@@ -150,7 +153,7 @@ def _gather_neighbors(config, store):
             "title": title,
             "updated_at": snap.meta.updated_at if snap.meta else None,
             "fetched_at": snap.fetched_at,
-            "paid": is_paid(title) or is_paid(w.group or w.name),
+            "paid": paid,
             "our_codes": our_codes,
             "we_absent": we_absent,
             "rows": eligible,
@@ -924,14 +927,20 @@ def _neighbor_section(spec, now) -> str:
     when = fmt_source_time(spec["updated_at"]) if spec["updated_at"] else _fetched_msk(spec["fetched_at"])
     paid = spec["paid"]
     flag_hdr = "Платн" if paid else "Согл"
+    label = "Платно" if paid else "Бюджет"
+    empty_txt = ("Пока никто не выполнил условия для платного."
+                 if paid else "Пока никто не проходит по Проходному ВП.")
+    absent_txt = ("вашего кода нет среди выполнивших условия для платного"
+                  if paid else "вашего кода нет среди проходящих по Проходному ВП")
+    h2 = f'<h2>{esc(label)} · {esc(spec["title"])}</h2>'
     if not spec["rows"]:
         return (
-            f'<section class="nb-sec"><h2>{esc(spec["title"])}</h2>'
+            f'<section class="nb-sec">{h2}'
             f'<div class="caption">список по состоянию на {esc(when)}</div>'
-            '<p class="empty">Пока никто не выполнил условия для платного.</p>'
+            f'<p class="empty">{esc(empty_txt)}</p>'
             "</section>"
         )
-    banner = ('<div class="banner">вашего кода нет среди выполнивших условия для платного</div>'
+    banner = (f'<div class="banner">{esc(absent_txt)}</div>'
               if spec["we_absent"] else "")
     head = (
         "<thead><tr>"
@@ -945,7 +954,7 @@ def _neighbor_section(spec, now) -> str:
         for i, e in enumerate(spec["rows"], 1)
     )
     return (
-        f'<section class="nb-sec"><h2>{esc(spec["title"])}</h2>'
+        f'<section class="nb-sec">{h2}'
         f'<div class="caption">список по состоянию на {esc(when)}</div>'
         + banner
         + '<div class="nb-scroll"><table class="nb">'
@@ -955,10 +964,11 @@ def _neighbor_section(spec, now) -> str:
 
 
 def build_neighbors_html(specs, now=None, link_scores=False) -> str:
-    """docs/mirea-list.html — «окружение»: для каждого track_neighbors конкурса
-    таблица только тех, кто выполнил условия («соблюдены условия для платного» =
-    consent) и активен, со сквозной нумерацией 1..N — раскладка офсайта, наша
-    строка подсвечена, коды показаны полностью."""
+    """docs/mirea-list.html — «окружение»: одна секция на каждый track_neighbors
+    конкурс. Фильтр зависит от типа: платный — «Соблюдены условия для платного»
+    (consent = API accepted); бюджетный — «Проходной ВП» (passing_real = API iHPO).
+    Только активные, со сквозной нумерацией 1..N — раскладка офсайта, наша строка
+    подсвечена, коды показаны полностью."""
     if now is None:
         now = datetime.now(timezone.utc)
     elif now.tzinfo is None:
@@ -979,7 +989,7 @@ def build_neighbors_html(specs, now=None, link_scores=False) -> str:
         '<div class="topbar"><div class="summary"><b>Окружение в списке</b> · '
         + links + "</div></div>\n"
         f"{sections}\n"
-        '<footer class="foot">обновляется каждый час · один конкурс · vuz_monitor</footer>\n'
+        '<footer class="foot">обновляется каждый час · конкурсы МИРЭА · vuz_monitor</footer>\n'
         "</div>\n</body></html>\n"
     )
 

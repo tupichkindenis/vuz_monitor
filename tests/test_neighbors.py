@@ -112,6 +112,48 @@ def test_gather_empty_when_none_eligible():
     assert specs[0]["we_absent"] is True
 
 
+def test_gather_budget_filters_by_passing_real():
+    # budget watch: filter is passing_real (iHPO), NOT consent
+    ents = [
+        _ent(1, "1000001", passing_real=False, consent=True),   # consent but not passing → excluded
+        _ent(2, "1366129", passing_real=True, consent=False),   # us, passing → included
+        _ent(3, "1000003", passing_real=True, consent=False),
+    ]
+    cfg, store, _ = _mk(ents, group="МИРЭА — бюджет")
+    specs = dashboard._gather_neighbors(cfg, store)
+    store.close()
+    assert specs[0]["paid"] is False
+    assert [e.code for e in specs[0]["rows"]] == ["1366129", "1000003"]  # passing_real only, place order
+    assert specs[0]["we_absent"] is False
+
+
+def test_gather_budget_excludes_inactive():
+    ents = [
+        _ent(1, "1366129", passing_real=True, is_active=True),
+        _ent(2, "1000002", passing_real=True, is_active=False),  # passing but inactive → excluded
+        _ent(3, "1000003", passing_real=True, is_active=True),
+    ]
+    cfg, store, _ = _mk(ents, group="МИРЭА — бюджет")
+    specs = dashboard._gather_neighbors(cfg, store)
+    store.close()
+    assert [e.code for e in specs[0]["rows"]] == ["1366129", "1000003"]
+
+
+def test_gather_paid_still_filters_by_consent_not_passing_real():
+    # paid watch unchanged: consent decides, passing_real is ignored
+    ents = [
+        _ent(1, "1000001", consent=True, passing_real=False),   # consent → included
+        _ent(2, "1366129", consent=False, passing_real=True),   # passing but no consent → EXCLUDED
+        _ent(3, "1000003", consent=True, passing_real=True),
+    ]
+    cfg, store, _ = _mk(ents, group="МИРЭА — платно")
+    specs = dashboard._gather_neighbors(cfg, store)
+    store.close()
+    assert specs[0]["paid"] is True
+    assert [e.code for e in specs[0]["rows"]] == ["1000001", "1000003"]  # us excluded (no consent)
+    assert specs[0]["we_absent"] is True
+
+
 def test_gather_paid_flag_from_group():
     ents = [_ent(1, "1366129")]
     cfg_p, store_p, _ = _mk(ents, group="МИРЭА — платно")
@@ -224,6 +266,51 @@ def test_render_absent_banner():
     rows = [_ent(1, "1000001", consent=True), _ent(2, "1000002", consent=True)]
     html = dashboard.build_neighbors_html([_spec(rows, we_absent=True)], now=NOW)
     assert "вашего кода нет среди выполнивших условия для платного" in html
+
+
+def test_render_section_label_paid_vs_budget():
+    rows = [_ent(1, "1366129", passing_real=True)]
+    paid_html = dashboard.build_neighbors_html([_spec(rows, paid=True)], now=NOW)
+    budget_html = dashboard.build_neighbors_html([_spec(rows, paid=False)], now=NOW)
+    assert "Платно ·" in paid_html and "Бюджет ·" not in paid_html
+    assert "Бюджет ·" in budget_html and "Платно ·" not in budget_html
+
+
+def test_render_budget_empty_message():
+    html = dashboard.build_neighbors_html([_spec([], paid=False, we_absent=True)], now=NOW)
+    assert "Пока никто не проходит по Проходному ВП" in html
+    assert "для платного" not in html
+
+
+def test_render_budget_absent_banner():
+    rows = [_ent(1, "1000001", passing_real=True), _ent(2, "1000002", passing_real=True)]
+    html = dashboard.build_neighbors_html([_spec(rows, paid=False, we_absent=True)], now=NOW)
+    assert "вашего кода нет среди проходящих по Проходному ВП" in html
+    assert "для платного" not in html
+
+
+def test_render_pages_budget_and_paid_sections_both_present():
+    store = Store(":memory:")
+    ts = NOW.isoformat()
+    wp = WatchConfig(name="ИСУ платно", adapter="mirea_api", url="http://p",
+                     group="МИРЭА — платно", track_neighbors=True)
+    wb = WatchConfig(name="ИСУ бюджет", adapter="mirea_api", url="http://b",
+                     group="МИРЭА — бюджет", track_neighbors=True)
+    store.save(Snapshot(watch_id=wp.watch_id,
+        meta=ProgramMeta(title="ИСУ / договор", plan=122, total=2, updated_at="2026-07-15 09:46:00"),
+        entrants=[_ent(1, "1366129", consent=True), _ent(2, "1179201", consent=True)], fetched_at=ts))
+    store.save(Snapshot(watch_id=wb.watch_id,
+        meta=ProgramMeta(title="ИСУ / общий", plan=11, total=2, updated_at="2026-07-15 09:46:00"),
+        entrants=[_ent(1, "1366129", passing_real=True), _ent(2, "1289372", passing_real=True)], fetched_at=ts))
+    cfg = AppConfig(telegram=TelegramConfig(chat_id="", bot_token=""),
+                    heartbeat="on_change_only", tracked_codes=["1366129"], watches=[wb, wp])
+    pages = dashboard.render_pages(cfg, store)
+    store.close()
+    html = pages["mirea-list.html"]
+    assert "Бюджет ·" in html and "Платно ·" in html            # both sections present
+    assert html.index("Бюджет ·") < html.index("Платно ·")      # budget first (config order: wb before wp)
+    assert "1289372" in html                                    # budget-only code shown
+    assert "1 ◄ вы" in html                                     # our row numbered sequentially
 
 
 # --- render_pages integration --- #
