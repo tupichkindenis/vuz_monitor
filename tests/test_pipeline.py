@@ -173,3 +173,32 @@ def test_process_watch_success_sets_watch_id_and_fetched_at(monkeypatch, tmp_pat
     assert rep.error is None
     assert rep.watch_id == w.watch_id
     assert rep.fetched_at == "2026-07-15T07:00:00+00:00"
+
+
+def test_new_watch_is_first_run(monkeypatch, tmp_path):
+    store = Store(str(tmp_path / "s.db"))
+    w = _watch()
+    _patch_adapter(monkeypatch, _snap(w.watch_id, place=1))
+    rep = pipeline._process_watch(w, _cfg([w]), store, dry_run=False)
+    assert rep.codes[0].first_run is True
+
+
+def test_migration_seeds_baseline_and_is_not_first_run(monkeypatch, tmp_path):
+    store = Store(str(tmp_path / "s.db"))
+    w = _watch()
+    store.save(_snap(w.watch_id, place=5))          # existing history, no notified_snapshot
+    _patch_adapter(monkeypatch, _snap(w.watch_id, place=5))   # unchanged this run
+    rep = pipeline._process_watch(w, _cfg([w]), store, dry_run=False)
+    assert rep.codes[0].first_run is False
+    assert rep.has_changes is False                  # seeded baseline == current → no change
+    assert store.load_notified_snapshot(w.watch_id) is not None   # baseline was seeded
+
+
+def test_diff_is_against_delivered_baseline_not_last_snapshot(monkeypatch, tmp_path):
+    store = Store(str(tmp_path / "s.db"))
+    w = _watch()
+    store.save_notified_snapshot(_snap(w.watch_id, place=5))   # last DELIVERED = place 5
+    store.save(_snap(w.watch_id, place=5))                     # last SAVED also 5
+    _patch_adapter(monkeypatch, _snap(w.watch_id, place=2))    # now moved to 2
+    rep = pipeline._process_watch(w, _cfg([w]), store, dry_run=False)
+    assert rep.has_changes is True                             # 5 -> 2 vs delivered baseline

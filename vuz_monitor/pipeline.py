@@ -44,13 +44,21 @@ def _process_watch(
         and prev.meta.updated_at == snap.meta.updated_at
     )
 
+    # Change-detection baseline = last DELIVERED snapshot, not last saved. On the
+    # first run after deploy an existing watch has snapshots but no baseline yet;
+    # seed it from the last snapshot so we don't re-announce «первый запуск».
+    baseline = store.load_notified_snapshot(watch.watch_id)
+    if baseline is None and prev is not None:
+        store.save_notified_snapshot(prev)
+        baseline = prev
+
     code_reports = []
     for code in config.resolve_codes(watch):
         new_status = compute_status(snap, code, watch.plan_override)
-        prev_status = compute_status(prev, code, watch.plan_override)
-        changes = compute_changes(prev_status, new_status)
+        base_status = compute_status(baseline, code, watch.plan_override)
+        changes = compute_changes(base_status, new_status)
         code_reports.append(
-            CodeReport(status=new_status, changes=changes, first_run=prev is None)
+            CodeReport(status=new_status, changes=changes, first_run=baseline is None)
         )
         if not dry_run and new_status is not None:
             # Compact per-code point for the dashboard sparklines — every hour,
