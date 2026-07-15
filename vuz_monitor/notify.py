@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import httpx
 
+from .adapters.base import is_connectivity_error
 from .format import (
     esc as _esc,
     fmt_source_time as _fmt_source_time,
@@ -17,6 +18,10 @@ TG_LIMIT = 4096
 API = "https://api.telegram.org/bot{token}/{method}"
 
 
+class TelegramNetworkError(RuntimeError):
+    """Telegram unreachable due to OUR connectivity (not a Telegram-side error)."""
+
+
 # --------------------------------------------------------------------------- #
 # Sections
 # --------------------------------------------------------------------------- #
@@ -24,6 +29,8 @@ def _specialty_block(report, show_code: bool) -> str:
     """One specialty (list) inside a group message: bold name + a bulleted standing."""
     head = f"📋 <b>{_esc(report.name)}</b>"
     if report.error:
+        if report.net_error:
+            return f"{head}\n– ⏳ временно недоступно"
         return f"{head}\n– ⚠️ ошибка: {_esc(report.error)}"
 
     paid = _is_paid(report.title) or _is_paid(report.group)
@@ -189,7 +196,10 @@ def _api_call(token: str, method: str, json=None) -> dict:
     except httpx.HTTPStatusError as exc:
         # Never surface the URL — it contains the bot token — in logs/exceptions.
         raise RuntimeError(f"Telegram {method} failed: HTTP {exc.response.status_code}") from None
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        # Never surface the URL — it contains the bot token.
+        if is_connectivity_error(exc):
+            raise TelegramNetworkError(f"Telegram {method}: network unreachable") from None
         raise RuntimeError(f"Telegram {method}: network error") from None
 
 
