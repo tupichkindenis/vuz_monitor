@@ -195,10 +195,35 @@ def test_render_scores_and_missing():
     assert "None" not in html                   # g used, never str(None)
 
 
+def test_render_sequential_numbering():
+    # official places are gappy (5, 40, 800) but № must be 1,2,3
+    rows = [_ent(5, "1366129"), _ent(40, "222"), _ent(800, "333")]
+    html = dashboard.build_neighbors_html([_spec(rows)], now=NOW)
+    assert '<td class="num">1 ◄ вы</td>' in html   # our row → seq 1, not place 5
+    assert '<td class="num">2</td>' in html         # seq 2, not place 40
+    assert '<td class="num">3</td>' in html         # seq 3, not place 800
+    assert '<td class="num">5</td>' not in html      # official place never shown as №
+    assert '<td class="num">800</td>' not in html
+
+
+def test_render_flag_uses_consent_not_paid_ok():
+    # consent=True, paid_ok=False → flag column must show «да» (consent), not «нет»
+    rows = [_ent(1, "1366129", consent=True, paid_ok=False)]
+    html = dashboard.build_neighbors_html([_spec(rows, paid=True)], now=NOW)
+    # flag td is the 4th cell; assert the yes-value is present for a consent row
+    assert "<td>да</td>" in html
+
+
+def test_render_empty_eligible_message():
+    html = dashboard.build_neighbors_html([_spec([], we_absent=True)], now=NOW)
+    assert "Пока никто не выполнил условия для платного" in html
+    assert "вашего кода нет" not in html   # empty message replaces the banner
+
+
 def test_render_absent_banner():
-    rows = [_ent(1, "1000001"), _ent(2, "1000002")]
+    rows = [_ent(1, "1000001", consent=True), _ent(2, "1000002", consent=True)]
     html = dashboard.build_neighbors_html([_spec(rows, we_absent=True)], now=NOW)
-    assert "вашего кода нет в этом списке" in html
+    assert "вашего кода нет среди выполнивших условия для платного" in html
 
 
 # --- render_pages integration --- #

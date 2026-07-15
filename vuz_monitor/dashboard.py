@@ -893,7 +893,7 @@ def _note(e) -> str:
     return "—"
 
 
-def _neighbor_row(e, our_codes, paid) -> str:
+def _neighbor_row(e, seq, our_codes, paid) -> str:
     ours = e.code in our_codes
     if ours:
         tr_cls = "you"
@@ -903,8 +903,8 @@ def _neighbor_row(e, our_codes, paid) -> str:
         tr_cls = "pass-main"
     else:
         tr_cls = ""
-    num = f'{esc(e.place)}{" ◄ вы" if ours else ""}'
-    flag = e.paid_ok if paid else e.consent
+    num = f'{esc(seq)}{" ◄ вы" if ours else ""}'
+    flag = e.consent
     cls_attr = f' class="{tr_cls}"' if tr_cls else ""
     return (
         f"<tr{cls_attr}>"
@@ -924,7 +924,14 @@ def _neighbor_section(spec, now) -> str:
     when = fmt_source_time(spec["updated_at"]) if spec["updated_at"] else _fetched_msk(spec["fetched_at"])
     paid = spec["paid"]
     flag_hdr = "Платн" if paid else "Согл"
-    banner = ('<div class="banner">вашего кода нет в этом списке — показан топ списка</div>'
+    if not spec["rows"]:
+        return (
+            f'<section class="nb-sec"><h2>{esc(spec["title"])}</h2>'
+            f'<div class="caption">список по состоянию на {esc(when)}</div>'
+            '<p class="empty">Пока никто не выполнил условия для платного.</p>'
+            "</section>"
+        )
+    banner = ('<div class="banner">вашего кода нет среди выполнивших условия для платного</div>'
               if spec["we_absent"] else "")
     head = (
         "<thead><tr>"
@@ -933,7 +940,10 @@ def _neighbor_section(spec, now) -> str:
         '<th class="num">ВИ</th><th class="num">ИД</th><th class="num">Σбалл</th>'
         "<th>Примечание</th></tr></thead>"
     )
-    body = "".join(_neighbor_row(e, spec["our_codes"], paid) for e in spec["rows"])
+    body = "".join(
+        _neighbor_row(e, i, spec["our_codes"], paid)
+        for i, e in enumerate(spec["rows"], 1)
+    )
     return (
         f'<section class="nb-sec"><h2>{esc(spec["title"])}</h2>'
         f'<div class="caption">список по состоянию на {esc(when)}</div>'
