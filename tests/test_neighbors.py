@@ -196,3 +196,22 @@ def test_render_pages_omits_list_page_when_not_flagged():
     store.close()
     assert "mirea-list.html" not in pages
     assert 'href="mirea-list.html"' not in pages["index.html"]
+
+
+def test_scores_and_list_pages_cross_link_bidirectionally():
+    ents = [_ent(1, "1366129"), _ent(2, "1179201")]
+    store = Store(":memory:")
+    w = WatchConfig(name="Спец", adapter="mirea_api", url="http://x",
+                    group="МИРЭА — платно", track_neighbors=True, track_scores=True)
+    ts = NOW.isoformat()
+    store.save(Snapshot(watch_id=w.watch_id,
+        meta=ProgramMeta(title="Спец (платно)", plan=15, total=2, updated_at="2026-07-15 09:46:00"),
+        entrants=ents, fetched_at=ts))
+    store.append_score_progress(w.watch_id, ts, 2, 0, {1300000: [2, 0]})
+    cfg = AppConfig(telegram=TelegramConfig(chat_id="", bot_token=""),
+                    heartbeat="on_change_only", tracked_codes=["1366129"], watches=[w])
+    pages = dashboard.render_pages(cfg, store)
+    store.close()
+    assert "mirea-list.html" in pages and "mirea-scores.html" in pages
+    assert 'href="mirea-scores.html"' in pages["mirea-list.html"]   # list → scores
+    assert 'href="mirea-list.html"' in pages["mirea-scores.html"]   # scores → list

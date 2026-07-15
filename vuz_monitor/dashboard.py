@@ -85,7 +85,7 @@ def render_pages(config, store, now=None) -> dict:
         pages["mirea-scores.html"] = build_score_progress_html(specs, now=now,
                                                                link_neighbors=has_neighbors)
     if has_neighbors:
-        pages["mirea-list.html"] = build_neighbors_html(neighbors, now=now)
+        pages["mirea-list.html"] = build_neighbors_html(neighbors, now=now, link_scores=has_scores)
     return pages
 
 
@@ -954,7 +954,7 @@ def _neighbor_section(spec, now) -> str:
     )
 
 
-def build_neighbors_html(specs, now=None) -> str:
+def build_neighbors_html(specs, now=None, link_scores=False) -> str:
     """docs/mirea-list.html — «окружение»: для каждого track_neighbors конкурса
     таблица «все на нашем месте и выше + 10 после», раскладка офсайта, наша строка
     подсвечена, коды показаны полностью."""
@@ -964,7 +964,7 @@ def build_neighbors_html(specs, now=None) -> str:
         now = now.replace(tzinfo=timezone.utc)
     sections = "".join(_neighbor_section(s, now) for s in specs) or \
         '<p class="empty">Нет отслеживаемых списков.</p>'
-    links = _LINK_CARDS + " " + _LINK_TABLE
+    links = _LINK_CARDS + " " + _LINK_TABLE + (" " + _LINK_SCORES if link_scores else "")
     return (
         "<!doctype html>\n"
         '<html lang="ru"><head>\n'
