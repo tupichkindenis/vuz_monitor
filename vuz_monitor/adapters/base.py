@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+import errno
+import socket
 
 import httpx
 
@@ -72,6 +74,40 @@ def truthy(v) -> bool:
         return False
     s = str(v).strip().lower()
     return s in {"1", "да", "+", "yes", "true", "оригинал", "согласие", "есть", "✓", "v"}
+
+
+_NET_ERRNOS = {
+    errno.ENETDOWN,     # 50 — interface down
+    errno.ENETUNREACH,  # 51 — network unreachable
+    errno.EHOSTUNREACH, # 65 — no route to host
+    errno.ECANCELED,    # 89 — connection torn down mid-request
+}
+
+
+def _causes(exc):
+    """Yield exc and its __cause__/__context__ chain, cycle-safe."""
+    seen, cur = set(), exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        yield cur
+        cur = cur.__cause__ or cur.__context__
+
+
+def is_connectivity_error(exc: BaseException) -> bool:
+    """True when the failure is OUR machine failing to reach the network
+    (DNS resolution, no route, cancelled), False for source-side failures
+    (HTTP status, connection refused, parse errors). Decides from the underlying
+    socket error, not the httpx wrapper type — httpx.ConnectError wraps both
+    EHOSTUNREACH and ECONNREFUSED, so the type alone cannot tell them apart."""
+    for e in _causes(exc):
+        if isinstance(e, socket.gaierror):
+            return True                       # DNS lookup failed → no network/DNS
+        if isinstance(e, OSError):
+            if e.errno in _NET_ERRNOS:
+                return True
+            if e.errno == errno.ECONNREFUSED:  # 61 — host answered, refused
+                return False
+    return False
 
 
 # --------------------------------------------------------------------------- #
