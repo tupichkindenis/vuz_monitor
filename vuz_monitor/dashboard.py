@@ -146,7 +146,7 @@ def _gather_neighbors(config, store):
             [e for e in snap.entrants if e.place is not None],
             key=lambda e: e.place,
         )
-        our_places = [e.place for e in ranked if normalize_code(e.code_display) in our_codes]
+        our_places = [e.place for e in ranked if e.code in our_codes]
         if our_places:
             cutoff = min(our_places)
             ahead_and_self = [e for e in ranked if e.place <= cutoff]
@@ -904,7 +904,7 @@ def _note(e) -> str:
 
 
 def _neighbor_row(e, our_codes, paid) -> str:
-    ours = normalize_code(e.code_display) in our_codes
+    ours = e.code in our_codes
     if ours:
         tr_cls = "you"
     elif e.passing_real:

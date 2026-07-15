@@ -215,3 +215,16 @@ def test_scores_and_list_pages_cross_link_bidirectionally():
     assert "mirea-list.html" in pages and "mirea-scores.html" in pages
     assert 'href="mirea-scores.html"' in pages["mirea-list.html"]   # list → scores
     assert 'href="mirea-list.html"' in pages["mirea-scores.html"]   # scores → list
+
+
+def test_gather_multi_code_window_anchors_on_min_place():
+    ents = [_ent(p, 1000000 + p) for p in range(1, 21)]   # places 1..20
+    ents[9] = _ent(10, "1366129")   # one tracked code at place 10
+    ents[4] = _ent(5, "9999999")    # another tracked code at the better place 5
+    cfg, store, _ = _mk(ents, tracked="1366129")
+    cfg.tracked_codes.append("9999999")                   # track both codes
+    specs = dashboard._gather_neighbors(cfg, store)
+    store.close()
+    # window anchors on the BETTER (min) place = 5 → rows 1..5 (ahead+self) + 6..15 (next 10)
+    assert [e.place for e in specs[0]["rows"]] == list(range(1, 16))
+    assert specs[0]["we_absent"] is False
