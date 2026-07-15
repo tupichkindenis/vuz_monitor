@@ -234,11 +234,23 @@ def run(config: AppConfig, dry_run: bool = False) -> int:
             print(("\n\n" + "═" * 40 + "\n\n").join(messages))
             return 0
 
-        for msg in messages:
-            notify.send_message(config.telegram.bot_token, config.telegram.chat_id, msg)
-        if mode == "daily":
+        delivered_all = True
+        for name, greports in groups:
+            try:
+                for msg in notify.build_messages([(name, greports)]):
+                    notify.send_message(config.telegram.bot_token, config.telegram.chat_id, msg)
+            except notify.TelegramNetworkError:
+                log.warning("Telegram unreachable; stopped after earlier group(s); will re-alert next run")
+                delivered_all = False
+                break
+            # Group delivered → advance its watches' delivered baseline, atomically.
+            with store.transaction():
+                for r in greports:
+                    if r.watch_id and r.fetched_at:   # successfully-fetched watches only
+                        store.promote_notified(r.watch_id)
+        if mode == "daily" and delivered_all:
             store.set_meta(HEARTBEAT_META_KEY, date.today().isoformat())
-        log.info("sent %d message(s)", len(messages))
+        log.info("send complete (delivered_all=%s)", delivered_all)
         return 0
     finally:
         store.close()
