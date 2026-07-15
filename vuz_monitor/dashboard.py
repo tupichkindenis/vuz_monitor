@@ -68,17 +68,24 @@ def generate_table(config, store, now=None) -> str:
 
 def render_pages(config, store, now=None) -> dict:
     """All pages from a single state.db pass: {filename: html}. The score-loading
-    page (mirea-scores.html) is included only when a `track_scores` competition has
-    recorded history."""
+    page (mirea-scores.html) and the neighbors page (mirea-list.html) are included
+    only when their feature has data for at least one competition."""
     groups, history = _gather(config, store)
     specs = _gather_score_progress(config, store)
+    neighbors = _gather_neighbors(config, store)
     has_scores = bool(specs)
+    has_neighbors = bool(neighbors)
     pages = {
-        "index.html": build_html(groups, history, now=now, link_scores=has_scores),
-        "table.html": build_table_html(groups, history, now=now, link_scores=has_scores),
+        "index.html": build_html(groups, history, now=now,
+                                 link_scores=has_scores, link_neighbors=has_neighbors),
+        "table.html": build_table_html(groups, history, now=now,
+                                       link_scores=has_scores, link_neighbors=has_neighbors),
     }
     if has_scores:
-        pages["mirea-scores.html"] = build_score_progress_html(specs, now=now)
+        pages["mirea-scores.html"] = build_score_progress_html(specs, now=now,
+                                                               link_neighbors=has_neighbors)
+    if has_neighbors:
+        pages["mirea-list.html"] = build_neighbors_html(neighbors, now=now)
     return pages
 
 
@@ -390,6 +397,7 @@ def _group_section(name, reports, history, now, vuz, osnova) -> str:
 _LINK_TABLE = '<a class="page-link" href="table.html">▦ таблица</a>'
 _LINK_CARDS = '<a class="page-link" href="index.html">☰ карточки</a>'
 _LINK_SCORES = '<a class="page-link" href="mirea-scores.html">📊 баллы</a>'
+_LINK_LIST = '<a class="page-link" href="mirea-list.html">👥 окружение</a>'
 
 
 def _summary(groups) -> dict:
@@ -431,7 +439,7 @@ def _summary_bar(groups, now, link_html: str = "") -> str:
     )
 
 
-def build_html(groups, history, now=None, link_scores=False) -> str:
+def build_html(groups, history, now=None, link_scores=False, link_neighbors=False) -> str:
     """Render the full page. `groups` = group_reports() output; `history` =
     {(watch_id, code_display): [daily points]}."""
     if now is None:
@@ -466,7 +474,9 @@ def build_html(groups, history, now=None, link_scores=False) -> str:
         "</head><body>\n"
         '<div class="wrap">\n'
         '<div class="topbar">'
-        + _summary_bar(groups, now, _LINK_TABLE + (" " + _LINK_SCORES if link_scores else ""))
+        + _summary_bar(groups, now, _LINK_TABLE
+                       + (" " + _LINK_SCORES if link_scores else "")
+                       + (" " + _LINK_LIST if link_neighbors else ""))
         + filters
         + "</div>\n"
         + _LEGEND + "\n"
@@ -584,7 +594,7 @@ _TABLE_HEADERS = [
 ]
 
 
-def build_table_html(groups, history, now=None, link_scores=False) -> str:
+def build_table_html(groups, history, now=None, link_scores=False, link_neighbors=False) -> str:
     """Desktop one-table view: row = specialty, columns = all params, sortable,
     with ВУЗ/основа filter chips and a place-trend sparkline column."""
     if now is None:
@@ -623,7 +633,9 @@ def build_table_html(groups, history, now=None, link_scores=False) -> str:
         f"<style>{_TABLE_STYLE}</style>\n"
         "</head><body>\n"
         '<div class="wrap-wide">\n'
-        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS + (" " + _LINK_SCORES if link_scores else "")) + filters + "</div>\n"
+        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS
+            + (" " + _LINK_SCORES if link_scores else "")
+            + (" " + _LINK_LIST if link_neighbors else "")) + filters + "</div>\n"
         '<p class="no-match" hidden>Нет строк под выбранный фильтр.</p>\n'
         '<div class="table-scroll"><table id="grid"><thead><tr>'
         + thead + "</tr></thead><tbody>\n" + tbody + "\n</tbody></table></div>\n"
@@ -815,7 +827,7 @@ def _score_section(spec, now) -> str:
     )
 
 
-def build_score_progress_html(specialties, now=None) -> str:
+def build_score_progress_html(specialties, now=None, link_neighbors=False) -> str:
     """docs/mirea-scores.html — score-loading tracker: intraday comparison
     (конец вчера · 10:00 · 14:00 · 19:00 · Изменение), range distribution across
     the same slots, and a trend sparkline, per tracked competition."""
@@ -825,7 +837,7 @@ def build_score_progress_html(specialties, now=None) -> str:
         now = now.replace(tzinfo=timezone.utc)
     sections = "".join(_score_section(s, now) for s in specialties) or \
         '<p class="empty">Нет отслеживаемых конкурсов.</p>'
-    links = _LINK_CARDS + " " + _LINK_TABLE
+    links = _LINK_CARDS + " " + _LINK_TABLE + (" " + _LINK_LIST if link_neighbors else "")
     return (
         "<!doctype html>\n"
         '<html lang="ru"><head>\n'

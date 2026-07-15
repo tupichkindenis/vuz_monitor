@@ -176,3 +176,23 @@ def test_render_absent_banner():
     rows = [_ent(1, "1000001"), _ent(2, "1000002")]
     html = dashboard.build_neighbors_html([_spec(rows, we_absent=True)], now=NOW)
     assert "вашего кода нет в этом списке" in html
+
+
+# --- render_pages integration --- #
+def test_render_pages_includes_list_page_when_flagged():
+    ents = [_ent(1, "1366129"), _ent(2, "1179201")]
+    cfg, store, _ = _mk(ents, track=True)
+    pages = dashboard.render_pages(cfg, store)
+    store.close()
+    assert "mirea-list.html" in pages
+    assert 'href="mirea-list.html"' in pages["index.html"]
+    assert 'href="mirea-list.html"' in pages["table.html"]
+
+
+def test_render_pages_omits_list_page_when_not_flagged():
+    ents = [_ent(1, "1366129")]
+    cfg, store, _ = _mk(ents, track=False)
+    pages = dashboard.render_pages(cfg, store)
+    store.close()
+    assert "mirea-list.html" not in pages
+    assert 'href="mirea-list.html"' not in pages["index.html"]
