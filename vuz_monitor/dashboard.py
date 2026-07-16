@@ -10,6 +10,7 @@ identical page offline. Formatters are shared with the notifier via ``format.py`
 """
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -19,10 +20,257 @@ from .format import esc, fmt_source_time, g, is_paid, mask_code, pass_real, spli
 from .models import normalize_code
 from .report import BUCKET_WIDTH, CodeReport, WatchReport, group_reports
 
+log = logging.getLogger(__name__)
+
 MSK = ZoneInfo("Europe/Moscow")
 STALE_HOURS = 2  # last snapshot older than this → «данные устарели» hint
 
 _SW, _SH, _SPAD = 120, 28, 3  # sparkline viewBox + padding
+
+STATUS_BAND_FRAC = 0.1  # МАИ (no ВП flags): «≈ по месту» band = ±max(3, round(КЦП*frac))
+
+
+def _verdict_bucket(passing_main, passing_real, place, kcp):
+    """status.html «светофор» bucket for one budget row → 'green'|'amber'|'red'|'none'.
+
+    Green is gated on ``passing_real`` (Проходной ВП = MIREA's official «прохожу
+    сейчас», a priority-aware projection). ``passing_main`` (Основной ВП) is an
+    INDEPENDENT axis, NOT a safety ladder: real data has passing_main=True while
+    passing_real=False (place 1, iHP=1/iHPO=0). So such a row is «Мимо», never green.
+
+    Flag sources (МИРЭА/МЭИ/Станкин) carry bool flags → flag ladder. МАИ publishes
+    no ВП flags (``passing_real is None``) → estimate by place vs КЦП (plan_override);
+    the caller renders МАИ in a separate «≈ по месту, оценка» section, not «проходишь».
+    """
+    if passing_real is not None:                       # flag source
+        if not passing_real:
+            return "red"
+        return "green" if passing_main else "amber"    # real да → green iff main да, else amber
+    # no ВП flags (МАИ): estimate by place vs КЦП. bool is an int subclass — reject it.
+    if place is None or not isinstance(kcp, int) or isinstance(kcp, bool) or kcp <= 0:
+        return "none"
+    band = max(3, round(kcp * STATUS_BAND_FRAC))
+    if place <= kcp - band:
+        return "green"
+    if place <= kcp + band:
+        return "amber"
+    return "red"
+
+
+_LINK_STATUS = '<a class="page-link" href="status.html">🚦 светофор</a>'
+
+_STATUS_STYLE = """
+:root{--bg:#fff;--card:#f8fafc;--bd:#e2e8f0;--ink:#0f172a;--ink2:#475569;--mut:#94a3b8;
+--green:#16a34a;--amber:#d97706;--red:#dc2626;--acc:#2563eb}
+@media(prefers-color-scheme:dark){:root{--bg:#0b1120;--card:#111a2e;--bd:#1e293b;--ink:#e5edf7;
+--ink2:#9fb0c4;--mut:#64748b;--green:#4ade80;--amber:#fbbf24;--red:#f87171;--acc:#60a5fa}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:16px 14px 40px}
+.topbar{margin-bottom:10px}
+.summary{font-size:14px;color:var(--ink2)}
+.summary b{color:var(--ink)}
+.counts{font-size:15px;margin:2px 0 0;font-weight:600}
+.links{display:block;margin-top:6px}
+.page-link{color:var(--acc);text-decoration:none;margin-right:12px;font-size:13px}
+.ssec{background:var(--card);border:1px solid var(--bd);border-radius:12px;
+padding:10px 12px;margin:10px 0;border-left:4px solid var(--bd)}
+.ssec.g{border-left-color:var(--green)}.ssec.a{border-left-color:var(--amber)}
+.ssec.r{border-left-color:var(--red)}.ssec.e{border-left-color:var(--mut)}
+.ssec h2,.ssec summary{font-size:15px;font-weight:650;margin:0 0 6px;cursor:default}
+.ssec summary{cursor:pointer;list-style:revert}
+.cap{font-size:12px;color:var(--mut);margin:-2px 0 6px}
+.srow{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:4px 0;
+border-top:1px solid var(--bd);font-size:14px}
+.srow:first-of-type{border-top:none}
+.svuz{color:var(--ink2);font-size:12px;min-width:66px;font-weight:600}
+.sname{flex:1;min-width:140px}
+.sstand{color:var(--ink2);font-size:13px;white-space:nowrap}
+.osn{color:var(--amber);font-weight:600}
+.est{color:var(--mut)}
+.foot{color:var(--mut);font-size:12px;text-align:center;margin-top:16px}
+.empty{color:var(--mut);text-align:center;padding:24px}
+"""
+
+
+def _status_row(vuz, name, st, extra="") -> str:
+    place = f"место {st.place}"
+    if st.total is not None:
+        place += f" из {st.total}"
+    score = f" · балл {g(st.final_score)}" if st.final_score is not None else ""
+    return (f'<div class="srow"><span class="svuz">{esc(vuz)}</span>'
+            f'<span class="sname">{esc(name)}</span>'
+            f'<span class="sstand">{place}{score}{extra}</span></div>')
+
+
+_BUCKET_ORDER = {"green": 2, "amber": 1, "red": 0, "none": -1}
+
+
+def _status_changes(groups, history, cap=8):
+    """Movers since the previous history day: bucket transitions (flag sources only —
+    the daily point stores the flags) and place moves ≥3. МАИ (no flags) contributes
+    place moves only. ALL transitions are kept; place-only movers are capped to the
+    `cap` largest (the applicant pool grows daily, so most rows drift — showing every
+    one buries the verdict). Returns (rows, dropped_count)."""
+    out = []
+    for gname, reps in groups:
+        if is_paid(gname):
+            continue
+        vuz = split_group(gname)[0]
+        for rep in reps:
+            st = rep.codes[0].status if rep.codes else None
+            if st is None:
+                continue
+            pts = history.get((rep.watch_id, st.code_display), [])
+            if len(pts) < 2:
+                continue
+            cur, prev = pts[-1], pts[-2]
+            if cur["place"] is None or prev["place"] is None:
+                continue
+            dp = cur["place"] - prev["place"]                 # <0 = поднялся (лучше)
+            trans = None
+            if cur["passing_real"] is not None and prev["passing_real"] is not None:
+                cb = _verdict_bucket(cur["passing_main"], cur["passing_real"], cur["place"], None)
+                pb = _verdict_bucket(prev["passing_main"], prev["passing_real"], prev["place"], None)
+                if cb != pb:
+                    trans = (pb, cb)
+            if trans is None and abs(dp) < 3:                 # not a mover
+                continue
+            out.append((vuz, rep.name, dp, trans, prev.get("day")))
+    trans_rows = [r for r in out if r[3]]                     # keep every bucket transition
+    move_rows = sorted((r for r in out if not r[3]), key=lambda t: -abs(t[2]))
+    return trans_rows + move_rows[:cap], max(0, len(move_rows) - cap)
+
+
+def _changes_section(changes, dropped, now) -> str:
+    if not changes:
+        return ('<section class="ssec"><h2>📈 Что изменилось со вчера</h2>'
+                '<div class="cap">со вчера без изменений</div></section>')
+    yday = (now.astimezone(MSK).date() - timedelta(days=1)).isoformat()
+    body = ""
+    for vuz, name, dp, trans, pday in changes:
+        parts = []
+        if trans:
+            pb, cb = trans
+            up = _BUCKET_ORDER[cb] > _BUCKET_ORDER[pb]
+            if cb == "green":
+                txt = "стал надёжным ✅"
+            elif cb == "amber" and up:
+                txt = "стал проходным ✅"
+            elif cb == "amber":
+                txt = "просел до хрупкого ⚠️"
+            else:
+                txt = "выпал из проходных ⚠️"
+            parts.append(f'<span class="{"good" if up else "osn"}">{txt}</span>')
+        if dp != 0:
+            parts.append(f'<span class="{"good" if dp < 0 else "est"}">'
+                         f'{"▲ " + str(-dp) if dp < 0 else "▼ " + str(dp)}</span>')
+        since = ""
+        if pday and pday != yday:
+            d = pday.split("-")
+            since = f' <span class="est">(с {d[2]}.{d[1]})</span>'
+        body += (f'<div class="srow"><span class="svuz">{esc(vuz)}</span>'
+                 f'<span class="sname">{esc(name)}</span>'
+                 f'<span class="sstand">{" · ".join(parts)}{since}</span></div>')
+    tail = f'<div class="cap">…и ещё {dropped} с меньшим сдвигом места</div>' if dropped else ""
+    return f'<section class="ssec"><h2>📈 Что изменилось со вчера</h2>{body}{tail}</section>'
+
+
+def build_status_html(groups, history, now=None, link_scores=False, link_neighbors=False) -> str:
+    """docs/status.html — командный центр «светофор»: бюджет по 3 корзинам (зелёный
+    привязан к passing_real), МАИ отдельно «≈ по месту», платка — «запасной аэродром»."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    green, amber, red, mai, nodata, paid = [], [], [], [], [], []
+    for gname, reps in groups:
+        vuz = split_group(gname)[0]
+        paidgrp = is_paid(gname) or is_paid(reps[0].title if reps else "")
+        for rep in reps:
+            st = rep.codes[0].status if rep.codes else None
+            if st is None or not st.present or st.place is None:
+                continue                                     # выбыл/нет данных — вне корзин
+            if paidgrp:
+                paid.append((vuz, rep.name, st))
+                continue
+            if st.passing_real is None and st.passing_main is None:   # no ВП flags (МАИ)
+                if st.plan is not None:
+                    mai.append((vuz, rep.name, st, _verdict_bucket(None, None, st.place, st.plan)))
+                else:
+                    nodata.append((vuz, rep.name, st))
+                continue
+            b = _verdict_bucket(st.passing_main, st.passing_real, st.place, st.plan)
+            (green if b == "green" else amber if b == "amber" else red).append((vuz, rep.name, st))
+
+    keyp = lambda t: t[2].place if t[2].place is not None else 10 ** 9
+    for lst in (green, amber, red, nodata, paid, mai):
+        lst.sort(key=keyp)
+
+    def _sec(cls, title, rows, extra_fn=None, collapsed=False):
+        if not rows:
+            return ""
+        body = "".join(_status_row(v, n, s, extra_fn(s) if extra_fn else "") for v, n, s in rows)
+        if collapsed:
+            return f'<details class="ssec {cls}"><summary>{title} ({len(rows)})</summary>{body}</details>'
+        return f'<section class="ssec {cls}"><h2>{title}</h2>{body}</section>'
+
+    def _mai_sec():
+        if not mai:
+            return ""
+        lbl = {"green": "внутри числа мест", "amber": "у границы", "red": "вне числа мест"}
+        body = "".join(
+            _status_row(v, n, s, f' · <span class="est">≈ {lbl.get(b, "")}</span>')
+            for v, n, s, b in mai)
+        return ('<section class="ssec e"><h2>≈ По месту (МАИ, оценка)</h2>'
+                '<div class="cap">не официальный флаг — квоты и приоритеты конкурентов не учтены</div>'
+                + body + "</section>")
+
+    def _paid_extra(s):
+        usl = "да" if (s.paid_ok or s.contract) else "нет"
+        return f' · условия: {usl}'
+
+    red_extra = lambda s: ' · <span class="osn">Осн.ВП: да</span>' if s.passing_main else ""
+
+    counts = f"🟢 {len(green)} · 🟡 {len(amber)} · 🔴 {len(red)}"
+    if mai:
+        counts += f" · ≈ {len(mai)}"
+    if nodata:
+        counts += f" · ❔ {len(nodata)}"
+    total = len(green) + len(amber) + len(red) + len(mai) + len(nodata)
+    counts += f" из {total} бюджетных"
+
+    buckets = (
+        _sec("g", "🟢 Проходишь — надёжно", green)
+        + _sec("a", "🟡 Проходишь — хрупко", amber)
+        + _sec("r", "🔴 Мимо", red, red_extra, collapsed=True)
+        + _mai_sec()
+        + _sec("e", "❔ Нет данных о проходе", nodata)
+        + _sec("e", "💳 Запасной аэродром — платные", paid, _paid_extra, collapsed=True)
+    ) or '<p class="empty">Нет бюджетных списков.</p>'
+    _chg, _chg_dropped = _status_changes(groups, history)
+    sections = _changes_section(_chg, _chg_dropped, now) + buckets
+
+    links = _LINK_CARDS + " " + _LINK_TABLE \
+        + (" " + _LINK_SCORES if link_scores else "") \
+        + (" " + _LINK_LIST if link_neighbors else "")
+    return (
+        "<!doctype html>\n<html lang=\"ru\"><head>\n<meta charset=\"utf-8\">\n"
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="robots" content="noindex, nofollow">\n'
+        "<title>Светофор · ВУЗ-мониторинг</title>\n"
+        f"<style>{_STATUS_STYLE}</style>\n</head><body>\n<div class=\"wrap\">\n"
+        '<div class="topbar"><div class="summary"><b>Куда я реально прохожу</b> · '
+        f'обновлено {now.astimezone(MSK).strftime("%d.%m %H:%M")} МСК'
+        f'<div class="counts">{counts}</div>'
+        f'<span class="links">{links}</span></div></div>\n'
+        f"{sections}\n"
+        '<footer class="foot">🟢=Основной ВП · 🟡=только Проходной ВП · 🔴=Проходной ВП нет · '
+        'обновляется каждый час · vuz_monitor</footer>\n'
+        "</div>\n</body></html>\n"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -76,19 +324,29 @@ def render_pages(config, store, now=None) -> dict:
     neighbors = _gather_neighbors(config, store)
     has_scores = bool(specs)
     has_neighbors = bool(neighbors)
-    pages = {
-        "index.html": build_html(groups, history, now=now,
-                                 link_scores=has_scores, link_neighbors=has_neighbors),
-        "table.html": build_table_html(groups, history, now=now,
-                                       link_scores=has_scores, link_neighbors=has_neighbors),
-    }
+    pages = {}
+
+    def _safe(name, fn):
+        """Build one page in isolation — a render bug in one page is logged and
+        skipped, never aborting the others (a new page must not break index/table)."""
+        try:
+            pages[name] = fn()
+        except Exception as exc:
+            log.warning("page %s render failed: %s", name, exc)
+
+    _safe("index.html", lambda: build_html(groups, history, now=now,
+                                           link_scores=has_scores, link_neighbors=has_neighbors))
+    _safe("table.html", lambda: build_table_html(groups, history, now=now,
+                                                 link_scores=has_scores, link_neighbors=has_neighbors))
+    _safe("status.html", lambda: build_status_html(groups, history, now=now,
+                                                   link_scores=has_scores, link_neighbors=has_neighbors))
     if has_scores:
-        pages["mirea-scores.html"] = build_score_progress_html(specs, now=now,
-                                                               link_neighbors=has_neighbors)
-        pages["mirea-applications.html"] = build_applications_html(specs, now=now,
-                                                                   link_neighbors=has_neighbors)
+        _safe("mirea-scores.html", lambda: build_score_progress_html(specs, now=now,
+                                                                     link_neighbors=has_neighbors))
+        _safe("mirea-applications.html", lambda: build_applications_html(specs, now=now,
+                                                                         link_neighbors=has_neighbors))
     if has_neighbors:
-        pages["mirea-list.html"] = build_neighbors_html(neighbors, now=now, link_scores=has_scores)
+        _safe("mirea-list.html", lambda: build_neighbors_html(neighbors, now=now, link_scores=has_scores))
     return pages
 
 
@@ -507,7 +765,7 @@ def build_html(groups, history, now=None, link_scores=False, link_neighbors=Fals
         "</head><body>\n"
         '<div class="wrap">\n'
         '<div class="topbar">'
-        + _summary_bar(groups, now, _LINK_TABLE
+        + _summary_bar(groups, now, _LINK_TABLE + " " + _LINK_STATUS
                        + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
                        + (" " + _LINK_LIST if link_neighbors else ""))
         + filters
@@ -666,7 +924,7 @@ def build_table_html(groups, history, now=None, link_scores=False, link_neighbor
         f"<style>{_TABLE_STYLE}</style>\n"
         "</head><body>\n"
         '<div class="wrap-wide">\n'
-        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS
+        '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS + " " + _LINK_STATUS
             + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
             + (" " + _LINK_LIST if link_neighbors else "")) + filters + "</div>\n"
         '<p class="no-match" hidden>Нет строк под выбранный фильтр.</p>\n'
@@ -1016,7 +1274,7 @@ def build_score_progress_html(specialties, now=None, link_neighbors=False) -> st
         now = now.replace(tzinfo=timezone.utc)
     sections = "".join(_score_section(s, now) for s in specialties) or \
         '<p class="empty">Нет отслеживаемых конкурсов.</p>'
-    links = _LINK_CARDS + " " + _LINK_TABLE + " " + _LINK_APPLICATIONS \
+    links = _LINK_CARDS + " " + _LINK_TABLE + " " + _LINK_STATUS + " " + _LINK_APPLICATIONS \
         + (" " + _LINK_LIST if link_neighbors else "")
     return (
         "<!doctype html>\n"
@@ -1162,7 +1420,7 @@ def build_neighbors_html(specs, now=None, link_scores=False) -> str:
         now = now.replace(tzinfo=timezone.utc)
     sections = "".join(_neighbor_section(s, now) for s in specs) or \
         '<p class="empty">Нет отслеживаемых списков.</p>'
-    links = _LINK_CARDS + " " + _LINK_TABLE \
+    links = _LINK_CARDS + " " + _LINK_TABLE + " " + _LINK_STATUS \
         + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
     return (
         "<!doctype html>\n"
