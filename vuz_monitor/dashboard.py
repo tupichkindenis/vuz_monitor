@@ -23,6 +23,35 @@ STALE_HOURS = 2  # last snapshot older than this → «данные устаре
 
 _SW, _SH, _SPAD = 120, 28, 3  # sparkline viewBox + padding
 
+STATUS_BAND_FRAC = 0.1  # МАИ (no ВП flags): «≈ по месту» band = ±max(3, round(КЦП*frac))
+
+
+def _verdict_bucket(passing_main, passing_real, place, kcp):
+    """status.html «светофор» bucket for one budget row → 'green'|'amber'|'red'|'none'.
+
+    Green is gated on ``passing_real`` (Проходной ВП = MIREA's official «прохожу
+    сейчас», a priority-aware projection). ``passing_main`` (Основной ВП) is an
+    INDEPENDENT axis, NOT a safety ladder: real data has passing_main=True while
+    passing_real=False (place 1, iHP=1/iHPO=0). So such a row is «Мимо», never green.
+
+    Flag sources (МИРЭА/МЭИ/Станкин) carry bool flags → flag ladder. МАИ publishes
+    no ВП flags (``passing_real is None``) → estimate by place vs КЦП (plan_override);
+    the caller renders МАИ in a separate «≈ по месту, оценка» section, not «проходишь».
+    """
+    if passing_real is not None:                       # flag source
+        if not passing_real:
+            return "red"
+        return "green" if passing_main else "amber"    # real да → green iff main да, else amber
+    # no ВП flags (МАИ): estimate by place vs КЦП. bool is an int subclass — reject it.
+    if place is None or not isinstance(kcp, int) or isinstance(kcp, bool) or kcp <= 0:
+        return "none"
+    band = max(3, round(kcp * STATUS_BAND_FRAC))
+    if place <= kcp - band:
+        return "green"
+    if place <= kcp + band:
+        return "amber"
+    return "red"
+
 
 # --------------------------------------------------------------------------- #
 # Generation from state.db

@@ -36,6 +36,54 @@ def _html(reports, history=None):
     return dashboard.build_html(group_reports(reports), history or {}, now=NOW)
 
 
+# --- _verdict_bucket (status.html светофор classifier) --------------------- #
+# Green is gated on passing_real (Проходной ВП = official «прохожу сейчас»).
+# passing_main (Основной ВП) is an INDEPENDENT axis, not a safety ladder:
+# real MIREA data has passing_main=True while passing_real=False.
+def test_verdict_flag_green_both_flags():
+    assert dashboard._verdict_bucket(True, True, 10, 40) == "green"
+
+
+def test_verdict_flag_amber_real_only():
+    # passing_real да, passing_main нет → проходишь, но хрупко
+    assert dashboard._verdict_bucket(False, True, 10, 40) == "amber"
+
+
+def test_verdict_flag_red_no_real():
+    assert dashboard._verdict_bucket(False, False, 900, 40) == "red"
+
+
+def test_verdict_flag_red_even_when_main_true_but_real_false():
+    # THE key case (test_mirea_api.py:52-53): iHP=1, iHPO=0 → officially NOT in now.
+    # Must be red, never green — green requires passing_real.
+    assert dashboard._verdict_bucket(True, False, 1, 40) == "red"
+
+
+def test_verdict_mai_band_green_inside():
+    # no flags (passing_real is None) → band by place vs kcp. band=max(3,round(60*0.1))=6
+    assert dashboard._verdict_bucket(None, None, 5, 60) == "green"     # 5 <= 60-6
+
+
+def test_verdict_mai_band_amber_near_border():
+    assert dashboard._verdict_bucket(None, None, 58, 60) == "amber"    # 54 < 58 <= 66
+
+
+def test_verdict_mai_band_red_outside():
+    assert dashboard._verdict_bucket(None, None, 80, 60) == "red"      # 80 > 66
+
+
+def test_verdict_none_no_flags_no_kcp():
+    assert dashboard._verdict_bucket(None, None, 15, None) == "none"
+
+
+def test_verdict_none_place_missing():
+    assert dashboard._verdict_bucket(None, None, None, 60) == "none"
+
+
+def test_verdict_none_kcp_nonpositive():
+    assert dashboard._verdict_bucket(None, None, 5, 0) == "none"
+
+
 # --- cards / summary ------------------------------------------------------- #
 def test_present_card_renders_standing():
     html = _html([mk_report("Спец A", mk_status(place=12, final_score=252.0))])
