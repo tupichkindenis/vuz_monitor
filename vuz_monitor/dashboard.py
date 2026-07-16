@@ -10,6 +10,7 @@ identical page offline. Formatters are shared with the notifier via ``format.py`
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -84,6 +85,8 @@ def render_pages(config, store, now=None) -> dict:
     if has_scores:
         pages["mirea-scores.html"] = build_score_progress_html(specs, now=now,
                                                                link_neighbors=has_neighbors)
+        pages["mirea-applications.html"] = build_applications_html(specs, now=now,
+                                                                   link_neighbors=has_neighbors)
     if has_neighbors:
         pages["mirea-list.html"] = build_neighbors_html(neighbors, now=now, link_scores=has_scores)
     return pages
@@ -391,6 +394,43 @@ _LINK_TABLE = '<a class="page-link" href="table.html">▦ таблица</a>'
 _LINK_CARDS = '<a class="page-link" href="index.html">☰ карточки</a>'
 _LINK_SCORES = '<a class="page-link" href="mirea-scores.html">📊 баллы</a>'
 _LINK_LIST = '<a class="page-link" href="mirea-list.html">👥 окружение</a>'
+_LINK_APPLICATIONS = '<a class="page-link" href="mirea-applications.html">📈 заявки</a>'
+
+_APP_STYLE = """
+:root{--bg:#fff;--card:#f8fafc;--bd:#e2e8f0;--ink:#0f172a;--ink2:#475569;--mut:#94a3b8;
+--grid:#e2e8f0;--acc:#2563eb;--accf:rgba(37,99,235,.12);--good:#16a34a}
+@media(prefers-color-scheme:dark){:root{--bg:#0b1120;--card:#111a2e;--bd:#1e293b;--ink:#e5edf7;
+--ink2:#9fb0c4;--mut:#64748b;--grid:#1e293b;--acc:#60a5fa;--accf:rgba(96,165,250,.16);--good:#4ade80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:780px;margin:0 auto;padding:16px 14px 40px}
+.topbar{margin-bottom:12px}
+.summary{font-size:14px;color:var(--ink2)}
+.summary b{color:var(--ink)}
+.links{margin-left:auto;display:block;margin-top:6px}
+.page-link{color:var(--acc);text-decoration:none;margin-right:12px;font-size:13px}
+.app-sec{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px 12px 10px;margin:12px 0}
+.app-sec h2{font-size:15px;font-weight:650;margin:0 0 8px}
+.chart{margin:4px 0 12px}
+.cap{font-size:12px;color:var(--mut);margin-bottom:4px}
+svg{width:100%;height:auto;display:block;overflow:visible}
+.ag{stroke:var(--grid);stroke-width:1}
+.at{fill:var(--mut);font-size:11px}
+.av{fill:var(--ink);font-size:11px;font-weight:600}
+.al{fill:none;stroke:var(--acc);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.aa{fill:var(--accf)}
+.ad{fill:var(--acc);stroke:var(--card);stroke-width:2}
+.ab{fill:var(--acc)}
+.app-tbl{border-collapse:collapse;width:100%;font-size:13px;margin-top:4px}
+.app-tbl th,.app-tbl td{padding:5px 8px;border-bottom:1px solid var(--bd);text-align:left}
+.app-tbl .num{text-align:right}
+.app-tbl thead th{color:var(--ink2);font-weight:600;font-size:12px}
+.good{color:var(--good)}
+.muted{color:var(--mut)}
+.empty{color:var(--mut);text-align:center;padding:24px}
+.foot{color:var(--mut);font-size:12px;text-align:center;margin-top:16px}
+"""
 
 
 def _summary(groups) -> dict:
@@ -468,7 +508,7 @@ def build_html(groups, history, now=None, link_scores=False, link_neighbors=Fals
         '<div class="wrap">\n'
         '<div class="topbar">'
         + _summary_bar(groups, now, _LINK_TABLE
-                       + (" " + _LINK_SCORES if link_scores else "")
+                       + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
                        + (" " + _LINK_LIST if link_neighbors else ""))
         + filters
         + "</div>\n"
@@ -627,7 +667,7 @@ def build_table_html(groups, history, now=None, link_scores=False, link_neighbor
         "</head><body>\n"
         '<div class="wrap-wide">\n'
         '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS
-            + (" " + _LINK_SCORES if link_scores else "")
+            + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
             + (" " + _LINK_LIST if link_neighbors else "")) + filters + "</div>\n"
         '<p class="no-match" hidden>Нет строк под выбранный фильтр.</p>\n'
         '<div class="table-scroll"><table id="grid"><thead><tr>'
@@ -715,6 +755,152 @@ def _daily_no_score(history):
             continue
         by_day[dt.astimezone(MSK).date().isoformat()] = r["no_score"]
     return [by_day[d] for d in sorted(by_day)]
+
+
+# --------------------------------------------------------------------------- #
+# Applications-per-day page (docs/mirea-applications.html): динамика числа
+# заявок (score_progress.total) по дням — генерируемая, самообновляемая.
+# --------------------------------------------------------------------------- #
+def _daily_totals(history):
+    """score_progress rows → [(MSK-day-iso, total)], one point per MSK day
+    (last observation of the day wins), oldest first."""
+    by_day = {}
+    for r in history:
+        dt = _parse(r["ts"])
+        if dt is None:
+            continue
+        by_day[dt.astimezone(MSK).date().isoformat()] = r["total"]
+    return [(d, by_day[d]) for d in sorted(by_day)]
+
+
+def _ddmm(day_iso):
+    _, m, d = day_iso.split("-")
+    return f"{d}.{m}"
+
+
+def _nice_step(raw):
+    if raw <= 0:
+        return 1
+    mag = 10 ** math.floor(math.log10(raw))
+    for m in (1, 2, 2.5, 5, 10):
+        if m * mag >= raw:
+            return m * mag
+    return 10 * mag
+
+
+def _axis_ticks(vmin, vmax, n=4):
+    """Rounded «nice» ticks covering [vmin, vmax]; ticks[0]/[-1] are the chart bounds."""
+    if vmax <= vmin:
+        vmax = vmin + 1
+    step = _nice_step((vmax - vmin) / n)
+    lo = math.floor(vmin / step) * step
+    hi = math.ceil(vmax / step) * step
+    ticks, v = [], lo
+    while v <= hi + step * 0.5:
+        ticks.append(int(round(v)))
+        v += step
+    return ticks
+
+
+def _line_svg(daily):
+    """Cumulative-total line chart (server-rendered SVG, <title> hover)."""
+    W, H, L, R, T, B = 640, 240, 54, 16, 18, 32
+    iw, ih = W - L - R, H - T - B
+    totals = [t for _, t in daily]
+    ticks = _axis_ticks(min(totals), max(totals), 4)
+    lo, hi = ticks[0], ticks[-1]
+    n = len(daily)
+    xf = lambda i: L + (iw / 2 if n == 1 else i * iw / (n - 1))
+    yf = lambda v: (T + ih * (1 - (v - lo) / (hi - lo))) if hi > lo else (T + ih / 2)
+    p = []
+    for v in ticks:
+        p.append(f'<line class="ag" x1="{L}" y1="{yf(v):.1f}" x2="{W-R}" y2="{yf(v):.1f}"/>')
+        p.append(f'<text class="at" x="{L-8}" y="{yf(v)+3:.1f}" text-anchor="end">{v}</text>')
+    pts = [(xf(i), yf(t)) for i, (_, t) in enumerate(daily)]
+    dpath = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area = dpath + f" L{pts[-1][0]:.1f},{T+ih} L{pts[0][0]:.1f},{T+ih} Z"
+    p.append(f'<path class="aa" d="{area}"/>')
+    p.append(f'<path class="al" d="{dpath}"/>')
+    for i, (day, t) in enumerate(daily):
+        x, y = pts[i]
+        p.append(f'<circle class="ad" cx="{x:.1f}" cy="{y:.1f}" r="4"><title>{esc(_ddmm(day))}: {t}</title></circle>')
+        p.append(f'<text class="av" x="{x:.1f}" y="{y-9:.1f}" text-anchor="middle">{t}</text>')
+        p.append(f'<text class="at" x="{x:.1f}" y="{H-10}" text-anchor="middle">{esc(_ddmm(day))}</text>')
+    return f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Всего заявок по дням">{"".join(p)}</svg>'
+
+
+def _bars_svg(daily):
+    """Per-day increment bar chart. Empty when <2 days."""
+    if len(daily) < 2:
+        return ""
+    deltas = [(daily[i][0], daily[i][1] - daily[i - 1][1]) for i in range(1, len(daily))]
+    W, H, L, R, T, B = 640, 200, 54, 16, 14, 32
+    iw, ih = W - L - R, H - T - B
+    ticks = _axis_ticks(0, max([d for _, d in deltas] + [1]), 3)
+    hi = ticks[-1]
+    bw = iw / len(deltas)
+    pad = bw * 0.3
+    yf = lambda v: (T + ih * (1 - v / hi)) if hi > 0 else (T + ih)
+    p = []
+    for v in ticks:
+        p.append(f'<line class="ag" x1="{L}" y1="{yf(v):.1f}" x2="{W-R}" y2="{yf(v):.1f}"/>')
+        p.append(f'<text class="at" x="{L-8}" y="{yf(v)+3:.1f}" text-anchor="end">+{v}</text>')
+    for i, (day, d) in enumerate(deltas):
+        bx, w = L + i * bw + pad / 2, bw - pad
+        yv = yf(max(d, 0))
+        h = max(2, (T + ih) - yv)
+        p.append(f'<rect class="ab" x="{bx:.1f}" y="{yv:.1f}" width="{w:.1f}" height="{h:.1f}" rx="3"><title>{esc(_ddmm(day))}: {d:+d}</title></rect>')
+        p.append(f'<text class="av" x="{bx+w/2:.1f}" y="{yv-6:.1f}" text-anchor="middle">{d:+d}</text>')
+        p.append(f'<text class="at" x="{bx+w/2:.1f}" y="{H-10}" text-anchor="middle">{esc(_ddmm(day))}</text>')
+    return f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Прирост заявок за день">{"".join(p)}</svg>'
+
+
+def _app_section(spec) -> str:
+    daily = _daily_totals(spec["history"])
+    if not daily:
+        return ""
+    rows = ""
+    prev = None
+    for day, total in daily:
+        delta = "—" if prev is None else f'<span class="{"good" if total>prev else "muted"}">{total-prev:+d}</span>'
+        rows += f"<tr><td>{esc(_ddmm(day))}</td><td class=\"num\">{total}</td><td class=\"num\">{delta}</td></tr>"
+        prev = total
+    return (
+        f'<section class="app-sec"><h2>{esc(spec["title"])}</h2>'
+        '<div class="chart"><div class="cap">Всего заявок (нарастающим итогом)</div>'
+        + _line_svg(daily) + "</div>"
+        + ('<div class="chart"><div class="cap">Прирост за день</div>' + _bars_svg(daily) + "</div>"
+           if len(daily) > 1 else "")
+        + '<table class="app-tbl"><thead><tr><th>День</th><th class="num">Всего</th>'
+        '<th class="num">+ за день</th></tr></thead><tbody>' + rows + "</tbody></table>"
+        + "</section>"
+    )
+
+
+def build_applications_html(specialties, now=None, link_neighbors=False) -> str:
+    """docs/mirea-applications.html — динамика числа заявок по дням, одна секция
+    на каждую track_scores специальность. Регенерируется из state.db каждый час."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    sections = "".join(_app_section(s) for s in specialties) \
+        or '<p class="empty">Нет данных о заявках (нужен track_scores).</p>'
+    links = _LINK_CARDS + " " + _LINK_TABLE + " " + _LINK_SCORES \
+        + (" " + _LINK_LIST if link_neighbors else "")
+    return (
+        "<!doctype html>\n<html lang=\"ru\"><head>\n<meta charset=\"utf-8\">\n"
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="robots" content="noindex, nofollow">\n'
+        "<title>Заявки по дням · ВУЗ-мониторинг</title>\n"
+        f"<style>{_APP_STYLE}</style>\n</head><body>\n<div class=\"wrap\">\n"
+        f'<div class="topbar"><div class="summary"><b>Динамика заявок</b> · '
+        f'обновлено {now.astimezone(MSK).strftime("%d.%m %H:%M")} МСК'
+        f'<span class="links">{links}</span></div></div>\n'
+        f"{sections}\n"
+        '<footer class="foot">обновляется каждый час · vuz_monitor</footer>\n'
+        "</div>\n</body></html>\n"
+    )
 
 
 def _slot_cell(row, getter):
@@ -830,7 +1016,8 @@ def build_score_progress_html(specialties, now=None, link_neighbors=False) -> st
         now = now.replace(tzinfo=timezone.utc)
     sections = "".join(_score_section(s, now) for s in specialties) or \
         '<p class="empty">Нет отслеживаемых конкурсов.</p>'
-    links = _LINK_CARDS + " " + _LINK_TABLE + (" " + _LINK_LIST if link_neighbors else "")
+    links = _LINK_CARDS + " " + _LINK_TABLE + " " + _LINK_APPLICATIONS \
+        + (" " + _LINK_LIST if link_neighbors else "")
     return (
         "<!doctype html>\n"
         '<html lang="ru"><head>\n'
@@ -975,7 +1162,8 @@ def build_neighbors_html(specs, now=None, link_scores=False) -> str:
         now = now.replace(tzinfo=timezone.utc)
     sections = "".join(_neighbor_section(s, now) for s in specs) or \
         '<p class="empty">Нет отслеживаемых списков.</p>'
-    links = _LINK_CARDS + " " + _LINK_TABLE + (" " + _LINK_SCORES if link_scores else "")
+    links = _LINK_CARDS + " " + _LINK_TABLE \
+        + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
     return (
         "<!doctype html>\n"
         '<html lang="ru"><head>\n'

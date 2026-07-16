@@ -90,6 +90,7 @@ cp "$OUT" "$WT/index.html"
 [ -f docs/table.html ] && cp docs/table.html "$WT/table.html"   # desktop summary table
 [ -f docs/mirea-scores.html ] && cp docs/mirea-scores.html "$WT/mirea-scores.html"  # score-loading tracker
 [ -f docs/mirea-list.html ] && cp docs/mirea-list.html "$WT/mirea-list.html"   # neighbors «окружение» page
+[ -f docs/mirea-applications.html ] && cp docs/mirea-applications.html "$WT/mirea-applications.html"  # applications-per-day charts
 : >"$WT/.nojekyll"                    # serve index.html verbatim, skip Jekyll
 git -C "$WT" add -A
 

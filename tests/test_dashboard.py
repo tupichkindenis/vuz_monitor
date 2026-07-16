@@ -36,6 +36,42 @@ def _html(reports, history=None):
     return dashboard.build_html(group_reports(reports), history or {}, now=NOW)
 
 
+# --- applications-per-day page (mirea-applications.html) -------------------- #
+APP_HISTORY = [
+    {"ts": "2026-07-13T09:00:00+00:00", "total": 4000, "no_score": 100, "buckets": {}},
+    {"ts": "2026-07-13T20:00:00+00:00", "total": 4087, "no_score": 90, "buckets": {}},   # last of 13th MSK
+    {"ts": "2026-07-14T20:00:00+00:00", "total": 4484, "no_score": 80, "buckets": {}},
+    {"ts": "2026-07-15T20:00:00+00:00", "total": 4672, "no_score": 70, "buckets": {}},
+]
+
+
+def test_daily_totals_downsamples_last_per_msk_day():
+    assert dashboard._daily_totals(APP_HISTORY) == [
+        ("2026-07-13", 4087), ("2026-07-14", 4484), ("2026-07-15", 4672),
+    ]
+
+
+def test_daily_totals_empty():
+    assert dashboard._daily_totals([]) == []
+
+
+def test_build_applications_html_renders_series():
+    html = dashboard.build_applications_html(
+        [{"title": "Интеллектуальные системы", "history": APP_HISTORY, "tracked": None}], now=NOW)
+    assert "Интеллектуальные системы" in html
+    assert "4672" in html and "4087" in html         # daily totals present
+    assert "+397" in html                            # delta 14th (4484-4087)
+    assert "<svg" in html                            # chart rendered
+    assert 'content="noindex' in html                # not indexed
+    assert 'href="index.html"' in html               # cross-link back
+
+
+def test_build_applications_html_empty_specs():
+    html = dashboard.build_applications_html([], now=NOW)
+    assert "<svg" not in html                         # no chart, but must not crash
+    assert 'content="noindex' in html
+
+
 # --- cards / summary ------------------------------------------------------- #
 def test_present_card_renders_standing():
     html = _html([mk_report("Спец A", mk_status(place=12, final_score=252.0))])
