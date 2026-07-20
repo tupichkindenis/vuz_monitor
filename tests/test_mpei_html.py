@@ -40,6 +40,22 @@ def test_budget_fields_and_place_order():
     assert other.consent is True and other.needs_dormitory is True  # Согласие да, «с/о гар.»
 
 
+def test_bvi_prefix_table_skipped():
+    # МЭИ prepends a small БВИ/olympiad sub-table (extra «Основание» column)
+    # before the ranked «По конкурсу» list on most programs. The applicant lives
+    # in the second table; the adapter must skip the БВИ table, not grab the first.
+    snap = _parse("mpei_bvi_prefix.html")
+    assert len(snap.entrants) == 2                    # only the «По конкурсу» rows
+
+    me = snap.by_code("1366129")
+    assert me is not None                             # was reported «не найден в списке»
+    assert me.place == 2
+    assert me.final_score == 259.0
+    assert me.priority == 3
+    assert me.passing_main is False and me.passing_real is False
+    assert snap.by_code("1361541") is None            # БВИ-table entrant not parsed
+
+
 def test_paid_variant_autodetect_and_conditions():
     snap = _parse("mpei_paid.html")
     assert snap.meta.plan == 59
