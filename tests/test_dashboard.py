@@ -648,3 +648,68 @@ def test_forecast_page_without_reference_has_no_ref_section():
     html = dashboard.render_pages(cfg, store)["mirea-forecast.html"]
     assert "остальные направления" not in html    # no ref → no section
     store.close()
+
+
+# --- МЭИ ranking page (docs/mpei.html) -------------------------------------- #
+def _mpei_watch(name, group, entrants, plan=10):
+    w = WatchConfig(name=name, adapter="mpei_html", url="http://x/" + name,
+                    params=None, group=group)
+    meta = ProgramMeta(title=name, plan=plan, total=len(entrants),
+                       updated_at="2026-07-20 14:00:00")
+    snap = Snapshot(watch_id=w.watch_id, meta=meta, entrants=entrants,
+                    fetched_at=datetime.now(timezone.utc).isoformat())
+    return w, snap
+
+
+def test_gather_mpei_rank_counts_only_passing_real_ahead():
+    # 3 ВП=ДА above me by place, 1 ВП=ДА below, plus non-ДА noise above → rank = 4
+    da_above = [Entrant(code=str(i), code_display=str(i), place=i, final_score=280.0 - i,
+                        priority=1, passing_real=True, consent=True) for i in range(1, 4)]
+    noise = Entrant(code="500", code_display="500", place=500, final_score=270.0,
+                    priority=1, passing_real=False, consent=True)  # not ДА → ignored
+    me = Entrant(code="1366129", code_display="1366129", place=880, final_score=259.0,
+                 priority=1, passing_real=False, consent=False)
+    da_below = Entrant(code="999", code_display="999", place=900, final_score=250.0,
+                       priority=1, passing_real=True, consent=True)  # below me → ignored
+    w, snap = _mpei_watch("1. Управление", "МЭИ — бюджет",
+                          da_above + [noise, me, da_below], plan=67)
+    store, cfg = _forecast_store([(w, snap)])
+    spec = dashboard._gather_mpei(cfg, store)
+    assert spec is not None
+    row = spec["budget"][0]
+    assert row["da_ahead"] == 3          # only ВП=ДА strictly above me
+    assert row["rank"] == 4              # my place in the ВП=ДА queue
+    assert row["da_total"] == 4          # 3 above + 1 below
+    assert row["passing_real"] is False
+    assert spec["my_score"] == 259.0
+    store.close()
+
+
+def test_render_pages_includes_mpei_with_budget_and_paid():
+    bud = _mpei_watch("1. Управление", "МЭИ — бюджет",
+                      [Entrant(code="1366129", code_display="1366129", place=880,
+                               final_score=259.0, priority=1, passing_real=False)], plan=67)
+    pay = _mpei_watch("1. Управление", "МЭИ — платно",
+                      [Entrant(code="1366129", code_display="1366129", place=102,
+                               final_score=259.0, priority=1, passing_real=False,
+                               contract=True, payment=False)], plan=10)
+    store, cfg = _forecast_store([bud, pay])
+    pages = dashboard.render_pages(cfg, store)
+    assert "mpei.html" in pages
+    html = pages["mpei.html"]
+    assert 'content="noindex' in html
+    assert "1366129" not in html            # tracked code never leaked verbatim
+    assert "Бюджет" in html and "Платно" in html
+    assert "Высший проходной" in html
+    # budget page cross-links to the МЭИ page
+    assert "mpei.html" in pages["index.html"]
+    store.close()
+
+
+def test_gather_mpei_none_when_absent():
+    other = Entrant(code="777", code_display="777", place=1, final_score=300.0,
+                    priority=1, passing_real=True)
+    w, snap = _mpei_watch("1. Управление", "МЭИ — бюджет", [other], plan=10)
+    store, cfg = _forecast_store([(w, snap)])
+    assert dashboard._gather_mpei(cfg, store) is None
+    store.close()

@@ -93,6 +93,7 @@ cp "$OUT" "$WT/index.html"
 [ -f docs/mirea-list.html ] && cp docs/mirea-list.html "$WT/mirea-list.html"   # neighbors «окружение» page
 [ -f docs/mirea-applications.html ] && cp docs/mirea-applications.html "$WT/mirea-applications.html"  # applications-per-day charts
 [ -f docs/mirea-forecast.html ] && cp docs/mirea-forecast.html "$WT/mirea-forecast.html"  # прогноз по приоритетам (Проходной/Гарантированный)
+[ -f docs/mpei.html ] && cp docs/mpei.html "$WT/mpei.html"   # МЭИ: место в очереди «Высший проходной»
 : >"$WT/.nojekyll"                    # serve index.html verbatim, skip Jekyll
 git -C "$WT" add -A
 
