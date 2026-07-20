@@ -178,7 +178,7 @@ def _changes_section(changes, dropped, now) -> str:
 
 
 def build_status_html(groups, history, now=None, link_scores=False, link_neighbors=False,
-                      link_forecast=False) -> str:
+                      link_forecast=False, link_mpei=False) -> str:
     """docs/status.html — командный центр «светофор»: бюджет по 3 корзинам (зелёный
     привязан к passing_real), МАИ отдельно «≈ по месту», платка — «запасной аэродром»."""
     if now is None:
@@ -257,7 +257,8 @@ def build_status_html(groups, history, now=None, link_scores=False, link_neighbo
     links = _LINK_CARDS + " " + _LINK_TABLE \
         + (" " + _LINK_SCORES if link_scores else "") \
         + (" " + _LINK_LIST if link_neighbors else "") \
-        + (" " + _LINK_FORECAST if link_forecast else "")
+        + (" " + _LINK_FORECAST if link_forecast else "") \
+        + (" " + _LINK_MPEI if link_mpei else "")
     return (
         "<!doctype html>\n<html lang=\"ru\"><head>\n<meta charset=\"utf-8\">\n"
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
@@ -327,9 +328,11 @@ def render_pages(config, store, now=None) -> dict:
     specs = _gather_score_progress(config, store)
     neighbors = _gather_neighbors(config, store)
     forecast = _gather_forecast(config, store)
+    mpei = _gather_mpei(config, store)
     has_scores = bool(specs)
     has_neighbors = bool(neighbors)
     has_forecast = forecast is not None
+    has_mpei = mpei is not None
     pages = {}
 
     def _safe(name, fn):
@@ -342,13 +345,13 @@ def render_pages(config, store, now=None) -> dict:
 
     _safe("index.html", lambda: build_html(groups, history, now=now,
                                            link_scores=has_scores, link_neighbors=has_neighbors,
-                                           link_forecast=has_forecast))
+                                           link_forecast=has_forecast, link_mpei=has_mpei))
     _safe("table.html", lambda: build_table_html(groups, history, now=now,
                                                  link_scores=has_scores, link_neighbors=has_neighbors,
-                                                 link_forecast=has_forecast))
+                                                 link_forecast=has_forecast, link_mpei=has_mpei))
     _safe("status.html", lambda: build_status_html(groups, history, now=now,
                                                    link_scores=has_scores, link_neighbors=has_neighbors,
-                                                   link_forecast=has_forecast))
+                                                   link_forecast=has_forecast, link_mpei=has_mpei))
     if has_scores:
         _safe("mirea-scores.html", lambda: build_score_progress_html(
             specs, now=now, link_neighbors=has_neighbors, link_forecast=has_forecast))
@@ -359,7 +362,12 @@ def render_pages(config, store, now=None) -> dict:
             neighbors, now=now, link_scores=has_scores, link_forecast=has_forecast))
     if has_forecast:
         _safe("mirea-forecast.html", lambda: build_forecast_html(
-            forecast, now=now, link_scores=has_scores, link_neighbors=has_neighbors))
+            forecast, now=now, link_scores=has_scores, link_neighbors=has_neighbors,
+            link_mpei=has_mpei))
+    if has_mpei:
+        _safe("mpei.html", lambda: build_mpei_html(
+            mpei, now=now, link_scores=has_scores, link_neighbors=has_neighbors,
+            link_forecast=has_forecast))
     return pages
 
 
@@ -523,6 +531,52 @@ def _gather_forecast(config, store):
         })
     ref.sort(key=lambda r: (r["okso"] or "", -(r["plan"] or 0)))
     return {"my_score": my_score, "rows": rows, "ref": ref}
+
+
+def _gather_mpei(config, store):
+    """Data for docs/mpei.html — моё место в очереди «Высший проходной = ДА» по
+    направлениям МЭИ. У МЭИ флаг «Высший проходной» (passing_real) ставят только
+    тем, кто подал согласие (на платном — договор + оплату) И реально проходит
+    сюда по своему приоритету. «Место среди ВП=ДА» = сколько таких абитуриентов
+    стоит выше меня по баллу, +1 (куда я встал бы, подай я согласие/оплату).
+
+    Порядок направлений — как в config (нумерация «1. …», «2. …»). Возвращает
+    {my_score, budget, paid} либо None, если меня нет ни в одном списке МЭИ."""
+    budget, paid = [], []
+    my_score = None
+    for w in config.watches:
+        if w.adapter != "mpei_html":
+            continue
+        snap = store.load_prev(w.watch_id)
+        if snap is None or snap.meta is None:
+            continue
+        our_codes = {normalize_code(c) for c in config.resolve_codes(w)}
+        me = next((e for e in snap.entrants if e.code in our_codes and e.is_active), None)
+        if me is None or me.place is None:
+            continue
+        da = [e for e in snap.entrants if e.passing_real and e.place is not None]
+        ahead = sum(1 for e in da if e.place < me.place)
+        if me.final_score is not None:
+            my_score = me.final_score
+        row = {
+            "title": snap.meta.title or w.name,
+            "plan": snap.meta.plan,
+            "total": snap.meta.total or len(snap.entrants),
+            "my_place": me.place,
+            "my_score": me.final_score,
+            "priority": me.priority,
+            "passing_real": bool(me.passing_real),
+            "consent": bool(me.consent),
+            "contract": me.contract,
+            "payment": me.payment,
+            "da_ahead": ahead,
+            "da_total": len(da),
+            "rank": ahead + 1,          # моё место в очереди ВП=ДА, если войду
+        }
+        (paid if is_paid(w.group or w.name) else budget).append(row)
+    if not budget and not paid:
+        return None
+    return {"my_score": my_score, "budget": budget, "paid": paid}
 
 
 # --------------------------------------------------------------------------- #
@@ -757,6 +811,7 @@ _LINK_SCORES = '<a class="page-link" href="mirea-scores.html">📊 баллы</a
 _LINK_LIST = '<a class="page-link" href="mirea-list.html">👥 окружение</a>'
 _LINK_APPLICATIONS = '<a class="page-link" href="mirea-applications.html">📈 заявки</a>'
 _LINK_FORECAST = '<a class="page-link" href="mirea-forecast.html">🎯 прогноз</a>'
+_LINK_MPEI = '<a class="page-link" href="mpei.html">🏛 МЭИ</a>'
 
 _APP_STYLE = """
 :root{--bg:#fff;--card:#f8fafc;--bd:#e2e8f0;--ink:#0f172a;--ink2:#475569;--mut:#94a3b8;
@@ -834,7 +889,8 @@ def _summary_bar(groups, now, link_html: str = "") -> str:
     )
 
 
-def build_forecast_html(spec, now=None, link_scores=False, link_neighbors=False) -> str:
+def build_forecast_html(spec, now=None, link_scores=False, link_neighbors=False,
+                        link_mpei=False) -> str:
     """docs/mirea-forecast.html — прогноз по моим бюджетным приоритетам МИРЭА.
     По каждой специальности из списка приоритетов: мест, «проходной сейчас»
     (min_score), «гарантированный» (min_score_all), мой балл и прогноз места.
@@ -887,7 +943,8 @@ def build_forecast_html(spec, now=None, link_scores=False, link_neighbors=False)
         )
     links = _LINK_CARDS + " " + _LINK_TABLE \
         + (" " + _LINK_SCORES if link_scores else "") \
-        + (" " + _LINK_LIST if link_neighbors else "")
+        + (" " + _LINK_LIST if link_neighbors else "") \
+        + (" " + _LINK_MPEI if link_mpei else "")
     myg = g(my_score)
     note = (
         "У МИРЭА два порога. <b>Проходной сейчас</b> — зачислили бы с учётом уже "
@@ -1019,8 +1076,132 @@ tbody tr.me{background:var(--accent-soft);}
 """
 
 
+_MPEI_STYLE = _FORECAST_STYLE + """
+.sech{font-size:15px;font-weight:650;margin:22px 0 4px;}
+.sech:first-of-type{margin-top:4px;}
+.secc{font-size:12.5px;color:var(--muted);margin:0 0 10px;}
+.secc b{color:var(--fg);}
+.small{font-size:11.5px;color:var(--muted);white-space:nowrap;}
+"""
+
+
+def _mpei_section(title, subtitle, rows, kind) -> str:
+    """One funding-type section (бюджет | платно) as a scrollable table.
+    `kind` = 'budget' | 'paid' drives the gate word and the status column."""
+    gate = "согласии" if kind == "budget" else "оплате"
+    body = []
+    for r in rows:
+        mine = r["passing_real"]
+        rank = r["rank"]
+        plan = r["plan"]
+        within = plan is not None and rank <= plan
+        if mine:
+            verdict = f'<span class="v me">прохожу · №{rank}</span>'
+        elif within:
+            verdict = f'<span class="v now">при {gate} → №{rank}</span>'
+        else:
+            verdict = f'<span class="v no">№{rank} — вне мест</span>'
+        col = "var(--accent)" if mine else ("var(--green)" if within else "var(--red)")
+        frac = min(100, max(6, round(rank / plan * 100))) if plan else 100
+        if kind == "budget":
+            status = f'согласие: {yesno(r["consent"])}'
+        else:
+            status = f'договор: {yesno(r["contract"])} · оплата: {yesno(r["payment"])}'
+        body.append(
+            f'<tr class="{"me" if mine else ""}">'
+            f'<td><div class="prog">{esc(r["title"])}</div>'
+            f'<div class="mbar"><i style="width:{frac}%;background:{col}"></i></div></td>'
+            f'<td class="r">{g(r["my_place"])}<span class="mut">/{g(r["total"])}</span></td>'
+            f'<td class="r">{g(r["da_ahead"])}</td>'
+            f'<td class="c"><span class="fc">{rank}</span></td>'
+            f'<td class="r mut">{g(r["da_total"])}</td>'
+            f'<td class="r">{g(plan)}</td>'
+            f'<td class="small">{status}</td>'
+            f'<td>{verdict}</td></tr>'
+        )
+    return (
+        f'<h2 class="sech">{esc(title)}</h2>'
+        f'<p class="secc">{subtitle}</p>'
+        '<div class="scroll"><table><thead><tr>'
+        '<th>Направление</th><th class="r">Моё<br>место</th>'
+        '<th class="r">ВП=ДА<br>впереди</th><th class="c">Место среди<br>ВП=ДА</th>'
+        '<th class="r">Всего<br>ВП=ДА</th><th class="r">Мест</th>'
+        + ('<th>Согласие</th>' if kind == "budget" else '<th>Договор · оплата</th>')
+        + '<th>Вердикт</th></tr></thead><tbody>\n'
+        + "".join(body)
+        + "</tbody></table></div>\n"
+    )
+
+
+def build_mpei_html(spec, now=None, link_scores=False, link_neighbors=False,
+                    link_forecast=False) -> str:
+    """docs/mpei.html — моё место среди «Высший проходной = ДА» по направлениям МЭИ.
+    Две секции: бюджет и платно. `spec` = {my_score, budget, paid} из `_gather_mpei`."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    budget = spec.get("budget") or []
+    paid = spec.get("paid") or []
+    my_score = spec.get("my_score") or 0
+    myg = g(my_score)
+    b_pass = sum(1 for r in budget if r["passing_real"])
+    p_pass = sum(1 for r in paid if r["passing_real"])
+
+    links = _LINK_CARDS + " " + _LINK_TABLE \
+        + (" " + _LINK_SCORES if link_scores else "") \
+        + (" " + _LINK_LIST if link_neighbors else "") \
+        + (" " + _LINK_FORECAST if link_forecast else "")
+
+    note = (
+        'Флаг <b>«Высший проходной = ДА»</b> в МЭИ ставят только тем, кто подал '
+        '<b>согласие</b> (на платном — <b>договор и оплату</b>) <b>и</b> реально проходит '
+        'сюда по своему приоритету. Одного балла мало: почти все, кто выше по общему '
+        'списку, проходят где-то ещё по более высокому приоритету и в очередь ВП=ДА '
+        'не попадают. <b>«Место среди ВП=ДА»</b> — где я встал бы в этой очереди по '
+        'баллу, подай я согласие/оплату (число стоящих выше меня «ДА», +1).'
+    )
+
+    sections = ""
+    if budget:
+        sections += _mpei_section(
+            "Бюджет", f"Мой балл <b>{myg}</b>. Сейчас прохожу (ВП=ДА) в "
+            f"<b>{b_pass} из {len(budget)}</b> бюджетных направлений.", budget, "budget")
+    if paid:
+        p_da = sum(r["da_total"] for r in paid)
+        gap = ("оплату почти никто ещё не внёс — очередь ВП=ДА пустая, поэтому ранняя "
+               "оплата ставит в самое начало"
+               if p_da == 0 else "порядок в очереди определяют оплатившие")
+        sections += _mpei_section(
+            "Платно", f"Сейчас прохожу (ВП=ДА) в <b>{p_pass} из {len(paid)}</b>; {gap}.",
+            paid, "paid")
+
+    return (
+        "<!doctype html>\n"
+        '<html lang="ru"><head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="robots" content="noindex, nofollow">\n'
+        "<title>ВУЗ-мониторинг · МЭИ — очередь «Высший проходной»</title>\n"
+        f"<style>{_MPEI_STYLE}</style>\n"
+        "</head><body>\n"
+        '<div class="wrap">\n'
+        '<div class="topbar"><div class="summary"><b>МЭИ · очередь «Высший проходной»</b> · '
+        + links + "</div></div>\n"
+        f'<div class="tiles"><div class="tile b"><b>{myg}</b><span>мой балл</span></div>'
+        f'<div class="tile g"><b>{b_pass} из {len(budget)}</b>'
+        '<span>бюджет: прохожу сейчас (ВП=ДА)</span></div>'
+        f'<div class="tile r"><b>{p_pass} из {len(paid)}</b>'
+        '<span>платно: прохожу сейчас (ВП=ДА)</span></div></div>\n'
+        f'<div class="note">{note}</div>\n'
+        + sections
+        + '<footer class="foot">обновляется каждый час · конкурсные списки МЭИ · vuz_monitor</footer>\n'
+        "</div>\n</body></html>\n"
+    )
+
+
 def build_html(groups, history, now=None, link_scores=False, link_neighbors=False,
-               link_forecast=False) -> str:
+               link_forecast=False, link_mpei=False) -> str:
     """Render the full page. `groups` = group_reports() output; `history` =
     {(watch_id, code_display): [daily points]}."""
     if now is None:
@@ -1058,7 +1239,8 @@ def build_html(groups, history, now=None, link_scores=False, link_neighbors=Fals
         + _summary_bar(groups, now, _LINK_TABLE + " " + _LINK_STATUS
                        + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
                        + (" " + _LINK_LIST if link_neighbors else "")
-                       + (" " + _LINK_FORECAST if link_forecast else ""))
+                       + (" " + _LINK_FORECAST if link_forecast else "")
+                       + (" " + _LINK_MPEI if link_mpei else ""))
         + filters
         + "</div>\n"
         + _LEGEND + "\n"
@@ -1177,7 +1359,7 @@ _TABLE_HEADERS = [
 
 
 def build_table_html(groups, history, now=None, link_scores=False, link_neighbors=False,
-                     link_forecast=False) -> str:
+                     link_forecast=False, link_mpei=False) -> str:
     """Desktop one-table view: row = specialty, columns = all params, sortable,
     with ВУЗ/основа filter chips and a place-trend sparkline column."""
     if now is None:
@@ -1219,7 +1401,8 @@ def build_table_html(groups, history, now=None, link_scores=False, link_neighbor
         '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS + " " + _LINK_STATUS
             + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
             + (" " + _LINK_LIST if link_neighbors else "")
-            + (" " + _LINK_FORECAST if link_forecast else "")) + filters + "</div>\n"
+            + (" " + _LINK_FORECAST if link_forecast else "")
+            + (" " + _LINK_MPEI if link_mpei else "")) + filters + "</div>\n"
         '<p class="no-match" hidden>Нет строк под выбранный фильтр.</p>\n'
         '<div class="table-scroll"><table id="grid"><thead><tr>'
         + thead + "</tr></thead><tbody>\n" + tbody + "\n</tbody></table></div>\n"
