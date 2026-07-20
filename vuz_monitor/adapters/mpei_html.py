@@ -43,6 +43,31 @@ def _iso(raw: str) -> "str | None":
         return raw or None
 
 
+def _pick_list_table(soup):
+    """Return the ranked «По конкурсу» table, skipping any leading БВИ sub-table.
+
+    On most МЭИ programs the page carries two tables: a small «без вступительных
+    испытаний» (olympiad) list first — identifiable by an extra «Основание» column
+    that shifts every leaf index — then the main ranked list. `soup.find("table")`
+    grabbed the first, so the applicant went unseen («не найден в списке»). Skip the
+    «Основание» tables (also keeps the leaf-column index map valid) and, among the
+    rest, take the one with the most rows (the actual ranked list).
+    """
+    tables = soup.find_all("table")
+    if not tables:
+        return None
+
+    def has_osnovanie(table) -> bool:
+        head = table.find("tr")
+        return head is not None and any(
+            "основание" in c.get_text(strip=True).lower()
+            for c in head.find_all(["td", "th"])
+        )
+
+    candidates = [t for t in tables if not has_osnovanie(t)] or tables
+    return max(candidates, key=lambda t: len(t.find_all("tr")))
+
+
 def _dorm(value: str) -> "bool | None":
     v = (value or "").strip().lower()
     if v.startswith("с/о"):
@@ -60,7 +85,7 @@ class MpeiHtmlAdapter(Adapter):
 
     def parse(self, html: str, watch: WatchConfig) -> Snapshot:
         soup = BeautifulSoup(html, "lxml")
-        table = soup.find("table")
+        table = _pick_list_table(soup)
         if table is None:
             raise ValueError(f"table not found at {watch.url}")
 
