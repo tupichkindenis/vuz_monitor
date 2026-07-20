@@ -217,10 +217,13 @@ def run(config: AppConfig, dry_run: bool = False) -> int:
                 return 0
 
         mode = (config.heartbeat or "always").lower()
+        # forecast_ref watches feed only the forecast page — never Telegram.
+        ref_ids = {w.watch_id for w in config.watches if w.forecast_ref}
+        notify_reports = [r for r in reports if r.watch_id not in ref_ids]
         # Decide per group; send the FULL group (all specialties) when any changed.
         groups = [
             (name, reps)
-            for name, reps in group_reports(reports)
+            for name, reps in group_reports(notify_reports)
             if _should_send_group(reps, mode, store)
         ]
         messages = notify.build_messages(groups)

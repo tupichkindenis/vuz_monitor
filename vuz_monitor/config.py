@@ -37,6 +37,10 @@ class WatchConfig:
     track_scores: bool = False
     # build the neighbors list page (docs/mirea-list.html) for this competition.
     track_neighbors: bool = False
+    # reference-only watch for the forecast page (docs/mirea-forecast.html):
+    # fetched + stored for its passing thresholds, but kept OUT of Telegram and
+    # of the cards/table/status/scores/neighbors pages (я сюда не подавался).
+    forecast_ref: bool = False
     # html_table adapter specifics
     table_selector: Optional[str] = None
     columns: Optional[dict] = None
@@ -102,6 +106,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                 group=w.get("group") or raw.get("group"),
                 track_scores=bool(w.get("track_scores", False)),
                 track_neighbors=bool(w.get("track_neighbors", False)),
+                forecast_ref=bool(w.get("forecast_ref", False)),
                 table_selector=w.get("table_selector"),
                 columns=w.get("columns"),
                 encoding=w.get("encoding"),

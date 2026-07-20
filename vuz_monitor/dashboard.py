@@ -284,6 +284,8 @@ def _gather(config, store):
     reports = []
     history = {}  # (watch_id, code_display) -> [daily points]
     for w in config.watches:
+        if w.forecast_ref:      # reference-only → forecast page, not cards/table/status
+            continue
         snap = store.load_prev(w.watch_id)
         code_reports = []
         for code in config.resolve_codes(w):
@@ -433,38 +435,62 @@ def _gather_neighbors(config, store):
     return specs
 
 
-def _gather_forecast(config, store):
-    """One row per МИРЭА **budget** competition the tracked applicant applied to,
-    for docs/mirea-forecast.html. Reads two official thresholds from each snapshot:
-    `min_score` (Проходной ВП — passing floor per CURRENT consents) and
-    `min_score_all` (Основной ВП — floor if EVERYONE consents, worst case). The
-    forecast «место» is where the applicant would land if this specialty were their
-    top priority: rank by score among the passing-ВП cohort of that group.
+def _forecast_place(snap, score, me=None):
+    """Rank among the passing-ВП cohort of `snap` if I entered it at `score`: how
+    many passers stand above me by score, +1. When `me` is an actual entrant, ties
+    are broken by MIREA's own `place`; for a reference group (I'm not in it) equal
+    scores are counted as ahead of me — a conservative estimate. Returns (place, cohort)."""
+    vp = [e for e in snap.entrants if e.is_active and e.passing_real]
+    above = sum(1 for e in vp if (e.final_score or 0) > score)
+    if me is not None:
+        above += sum(1 for e in vp
+                     if (e.final_score or 0) == score
+                     and e.place is not None and me.place is not None
+                     and e.place < me.place)
+    else:
+        above += sum(1 for e in vp if (e.final_score or 0) == score)
+    return above + 1, len(vp)
 
-    Returns rows sorted by the applicant's priority, plus `my_score` (shared across
-    rows). Empty when the tracked code isn't found in any budget МИРЭА snapshot."""
+
+def _okso_of(name):
+    """Leading ОКСО code from a watch name like «09.03.02 Компьютерный дизайн», else None."""
+    head = (name or "").split(" ", 1)[0]
+    parts = head.split(".")
+    return head if len(parts) == 3 and all(p.isdigit() for p in parts) else None
+
+
+def _gather_forecast(config, store):
+    """Data for docs/mirea-forecast.html. Reads two official thresholds from each
+    МИРЭА **budget** snapshot: `min_score` (Проходной ВП — floor per CURRENT
+    consents) and `min_score_all` (Основной ВП — floor if EVERYONE consents).
+
+    Two lists:
+      • `rows` — one per budget competition I applied to, sorted by my priority.
+        «Прогноз места» = where I'd land making it my top priority.
+      • `ref` — one per `forecast_ref` 09.03.xx budget competition I did NOT apply
+        to, with a hypothetical place from inserting my score into its ВП-cohort.
+
+    Returns {my_score, rows, ref} or None when I'm in no budget МИРЭА snapshot."""
     rows = []
+    ref_snaps = []       # (watch, snapshot) deferred until my_score is known
     my_score = None
     for w in config.watches:
         if w.adapter != "mirea_api" or is_paid(w.group or w.name):
             continue
         snap = store.load_prev(w.watch_id)
         if snap is None or snap.meta is None or snap.meta.min_score is None:
+            if w.forecast_ref and snap is not None:
+                ref_snaps.append((w, snap))   # keep — thresholds may be missing only
             continue
         our_codes = {normalize_code(c) for c in config.resolve_codes(w)}
         me = next((e for e in snap.entrants if e.code in our_codes and e.is_active), None)
         if me is None or me.priority is None:
+            if w.forecast_ref:
+                ref_snaps.append((w, snap))
             continue
         score = me.final_score or 0
         my_score = me.final_score
-        vp = [e for e in snap.entrants if e.is_active and e.passing_real]
-        above = sum(1 for e in vp if (e.final_score or 0) > score)
-        ties = sum(1 for e in vp
-                   if (e.final_score or 0) == score
-                   and e.place is not None and me.place is not None
-                   and e.place < me.place)
-        forecast = above + ties + 1
-        pass_now = snap.meta.min_score is not None and score >= snap.meta.min_score
+        forecast, vp_count = _forecast_place(snap, score, me)
         rows.append({
             "priority": me.priority,
             "title": snap.meta.title or w.name,
@@ -472,14 +498,31 @@ def _gather_forecast(config, store):
             "min_score": snap.meta.min_score,
             "min_score_all": snap.meta.min_score_all,
             "forecast": forecast,
-            "vp_count": len(vp),
-            "pass_now": pass_now,
+            "vp_count": vp_count,
+            "pass_now": score >= snap.meta.min_score,
             "passing_real": bool(me.passing_real),
         })
     rows.sort(key=lambda r: r["priority"])
-    if not rows:
+    if not rows or my_score is None:
         return None
-    return {"my_score": my_score, "rows": rows}
+
+    ref = []
+    for w, snap in ref_snaps:
+        if snap.meta is None or snap.meta.min_score is None or not snap.meta.plan:
+            continue
+        forecast, vp_count = _forecast_place(snap, my_score, None)
+        ref.append({
+            "okso": _okso_of(w.name),
+            "title": snap.meta.title or w.name,
+            "plan": snap.meta.plan,
+            "min_score": snap.meta.min_score,
+            "min_score_all": snap.meta.min_score_all,
+            "forecast": forecast,
+            "vp_count": vp_count,
+            "pass_now": my_score >= snap.meta.min_score,
+        })
+    ref.sort(key=lambda r: (r["okso"] or "", -(r["plan"] or 0)))
+    return {"my_score": my_score, "rows": rows, "ref": ref}
 
 
 # --------------------------------------------------------------------------- #
@@ -795,12 +838,15 @@ def build_forecast_html(spec, now=None, link_scores=False, link_neighbors=False)
     """docs/mirea-forecast.html — прогноз по моим бюджетным приоритетам МИРЭА.
     По каждой специальности из списка приоритетов: мест, «проходной сейчас»
     (min_score), «гарантированный» (min_score_all), мой балл и прогноз места.
-    `spec` = {my_score, rows} из `_gather_forecast`, либо None (страница не строится)."""
+    `spec` = {my_score, rows, ref} из `_gather_forecast`, либо None (не строится).
+    Ниже основной таблицы — справка: оставшиеся 09.03.xx программы МИРЭА, куда я не
+    подавался, с оценкой места (вставка моего балла в проходную ВП-когорту)."""
     if now is None:
         now = datetime.now(timezone.utc)
     elif now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     rows = spec["rows"]
+    ref = spec.get("ref") or []
     my_score = spec["my_score"] or 0
     pass_now = sum(1 for r in rows if r["pass_now"])
     alls = [r["min_score_all"] for r in rows if r["min_score_all"] is not None]
@@ -859,6 +905,48 @@ def build_forecast_html(spec, now=None, link_scores=False, link_neighbors=False)
         note += " (гарантированный порог появится после ближайшего часового обновления)"
     note += (". «Прогноз места» — где бы я оказался, сделай я эту специальность "
              "верхним приоритетом: место по баллу среди проходной ВП-когорты группы.")
+
+    ref_section = ""
+    if ref:
+        ref_body = []
+        for r in ref:
+            pn = r["pass_now"]
+            plan = r["plan"]
+            d = my_score - (r["min_score"] or 0)
+            d_txt = ("+" if d >= 0 else "") + g(d)
+            verdict = ('<span class="v now">прошёл бы</span>' if pn
+                       else '<span class="v no">не прошёл бы</span>')
+            fc = (f'<span class="fc">≈{r["forecast"]}</span><span class="mut">/{g(plan)}</span>'
+                  if pn else f'<span class="mut">&gt;{g(plan)}</span>')
+            col = "var(--green)" if pn else "var(--red)"
+            frac = (max(6, round(r["forecast"] / plan * 100)) if pn and plan else 100)
+            ref_body.append(
+                '<tr>'
+                f'<td><div class="prog">{esc(r["title"])}'
+                + (f'<span class="okso">{esc(r["okso"])}</span>' if r["okso"] else "")
+                + '</div>'
+                f'<div class="mbar"><i style="width:{frac}%;background:{col}"></i></div></td>'
+                f'<td class="r">{g(plan)}</td>'
+                f'<td class="r">{g(r["min_score"])}</td>'
+                f'<td class="r mut">{g(r["min_score_all"])}</td>'
+                f'<td class="r"><span class="d {"pos" if d >= 0 else "neg"}">{d_txt}</span></td>'
+                f'<td class="c">{fc}</td>'
+                f'<td>{verdict}</td></tr>'
+            )
+        ref_pass = sum(1 for r in ref if r["pass_now"])
+        ref_section = (
+            '<h2 class="refh">Справка: остальные направления 09.03.xx в МИРЭА</h2>'
+            f'<p class="refc">Программы бюджета (общий конкурс), куда я <b>не</b> подавался — '
+            f'прошёл бы сейчас в <b>{ref_pass} из {len(ref)}</b>. «Прогноз места» здесь '
+            'оценка (≈): мой балл вставлен в проходную ВП-когорту группы.</p>'
+            '<div class="scroll"><table><thead><tr>'
+            '<th>Специальность</th><th class="r">Мест</th>'
+            '<th class="r">Проходной<br>сейчас</th><th class="r">Гаранти-<br>рованный</th>'
+            '<th class="r">Балл vs<br>проходной</th><th class="c">Прогноз<br>места</th>'
+            '<th>Вердикт</th></tr></thead><tbody>\n'
+            + "".join(ref_body)
+            + "</tbody></table></div>\n"
+        )
     return (
         "<!doctype html>\n"
         '<html lang="ru"><head>\n'
@@ -884,7 +972,8 @@ def build_forecast_html(spec, now=None, link_scores=False, link_neighbors=False)
         '<th>Вердикт</th></tr></thead><tbody>\n'
         + "".join(body)
         + "</tbody></table></div>\n"
-        '<footer class="foot">обновляется каждый час · конкурсы МИРЭА · vuz_monitor</footer>\n'
+        + ref_section
+        + '<footer class="foot">обновляется каждый час · конкурсы МИРЭА · vuz_monitor</footer>\n'
         "</div>\n</body></html>\n"
     )
 
@@ -915,6 +1004,10 @@ tbody tr.me{background:var(--accent-soft);}
 .pr{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:21px;border-radius:6px;font-weight:700;font-size:12px;background:var(--border);color:var(--fg);}
 .pr.p1{background:var(--accent);color:#fff;}
 .prog{font-weight:600;font-size:12.5px;}
+.okso{font-size:10px;font-weight:700;color:var(--muted);background:var(--border);border-radius:4px;padding:1px 5px;margin-left:6px;font-variant-numeric:tabular-nums;}
+.refh{font-size:15px;font-weight:650;margin:26px 0 4px;}
+.refc{font-size:12.5px;color:var(--muted);margin:0 0 10px;}
+.refc b{color:var(--fg);}
 .mbar{position:relative;height:4px;border-radius:2px;background:var(--border);margin-top:4px;overflow:hidden;max-width:280px;}
 .mbar i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;}
 .mut{color:var(--muted);}

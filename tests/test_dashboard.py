@@ -482,10 +482,10 @@ def test_generate_missing_snapshot_is_no_data():
 
 
 # --- forecast page (docs/mirea-forecast.html) ------------------------------ #
-def _forecast_watch(name, group, min_score, min_all, entrants, plan=11):
+def _forecast_watch(name, group, min_score, min_all, entrants, plan=11, forecast_ref=False):
     # distinct params → distinct watch_id (hash of adapter+url+params)
     w = WatchConfig(name=name, adapter="mirea_api", url="http://x",
-                    params={"competitions[]": name}, group=group)
+                    params={"competitions[]": name}, group=group, forecast_ref=forecast_ref)
     meta = ProgramMeta(title=name, plan=plan, total=1000,
                        min_score=min_score, min_score_all=min_all,
                        updated_at="2026-07-20 11:00:00")
@@ -576,4 +576,75 @@ def test_forecast_page_sorted_by_priority_and_renders():
     assert "не прошёл бы" in html
     # guaranteed thresholds present → tile shows "N из 2", not "—"
     assert "гарантированно" in html
+    store.close()
+
+
+# --- forecast reference table (09.03.xx groups I didn't apply to) ----------- #
+def test_okso_of_parses_leading_code():
+    assert dashboard._okso_of("09.03.02 Компьютерный дизайн") == "09.03.02"
+    assert dashboard._okso_of("Автономные роботы") is None
+    assert dashboard._okso_of("") is None
+
+
+def _me_entrant(score=258.0, place=9, priority=1, passing_real=True):
+    return Entrant(code="1366129", code_display="1366129", place=place,
+                   final_score=score, priority=priority, passing_real=passing_real)
+
+
+def test_forecast_reference_row_hypothetical_place():
+    # my priority-1 group (establishes my_score=258) + a reference group I'm absent from
+    mine = _forecast_watch("Моя", "МИРЭА — бюджет", 258.0, 296.0, [_me_entrant()], plan=11)
+    # reference group: 2 passing above 258 by score, 1 below → my est. place = 3
+    ref_ents = [Entrant(code=str(i), code_display=str(i), place=i, final_score=s,
+                        priority=1, passing_real=True)
+                for i, s in ((1, 270.0), (2, 262.0), (3, 240.0))]
+    ref = _forecast_watch("09.03.03 Управление данными", "МИРЭА — справка",
+                          230.0, 285.0, ref_ents, plan=28, forecast_ref=True)
+    store, cfg = _forecast_store([mine, ref])
+    spec = dashboard._gather_forecast(cfg, store)
+    assert len(spec["rows"]) == 1          # only my applied group in the main list
+    assert len(spec["ref"]) == 1
+    r = spec["ref"][0]
+    assert r["okso"] == "09.03.03"
+    assert r["forecast"] == 3              # 2 passing above 258 (270,262) + me
+    assert r["pass_now"] is True           # 258 >= 230
+    store.close()
+
+
+def test_forecast_ref_excluded_from_cards_and_status():
+    mine = _forecast_watch("Моя", "МИРЭА — бюджет", 258.0, 296.0, [_me_entrant()], plan=11)
+    other = Entrant(code="555", code_display="555", place=1, final_score=999.0,
+                    priority=1, passing_real=True)      # someone else — I'm absent here
+    ref = _forecast_watch("09.03.02 Секретная", "МИРЭА — справка", 230.0, 285.0,
+                          [other], plan=40, forecast_ref=True)
+    store, cfg = _forecast_store([mine, ref])
+    pages = dashboard.render_pages(cfg, store)
+    # reference program title must NOT leak onto index/status (я туда не подавался)
+    assert "Секретная" not in pages["index.html"]
+    assert "Секретная" not in pages.get("status.html", "")
+    # but it IS on the forecast reference table
+    assert "Секретная" in pages["mirea-forecast.html"]
+    assert "остальные направления 09.03.xx" in pages["mirea-forecast.html"]
+    store.close()
+
+
+def test_forecast_ref_not_notified(monkeypatch):
+    # a forecast_ref watch must never reach Telegram grouping
+    from vuz_monitor import pipeline
+    mine = _forecast_watch("Моя", "МИРЭА — бюджет", 258.0, 296.0, [_me_entrant()], plan=11)
+    other = Entrant(code="555", code_display="555", place=1, final_score=999.0,
+                    priority=1, passing_real=True)
+    ref = _forecast_watch("09.03.02 Реф", "МИРЭА — справка", 230.0, 285.0,
+                          [other], plan=40, forecast_ref=True)
+    store, cfg = _forecast_store([mine, ref])
+    ref_ids = {w.watch_id for w in cfg.watches if w.forecast_ref}
+    assert len(ref_ids) == 1 and ref[0].watch_id in ref_ids
+    store.close()
+
+
+def test_forecast_page_without_reference_has_no_ref_section():
+    mine = _forecast_watch("Моя", "МИРЭА — бюджет", 258.0, 296.0, [_me_entrant()], plan=11)
+    store, cfg = _forecast_store([mine])
+    html = dashboard.render_pages(cfg, store)["mirea-forecast.html"]
+    assert "остальные направления" not in html    # no ref → no section
     store.close()
