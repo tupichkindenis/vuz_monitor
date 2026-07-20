@@ -479,3 +479,101 @@ def test_generate_missing_snapshot_is_no_data():
     html = dashboard.generate(cfg, store)   # nothing saved yet
     assert "нет данных" in html
     store.close()
+
+
+# --- forecast page (docs/mirea-forecast.html) ------------------------------ #
+def _forecast_watch(name, group, min_score, min_all, entrants, plan=11):
+    # distinct params → distinct watch_id (hash of adapter+url+params)
+    w = WatchConfig(name=name, adapter="mirea_api", url="http://x",
+                    params={"competitions[]": name}, group=group)
+    meta = ProgramMeta(title=name, plan=plan, total=1000,
+                       min_score=min_score, min_score_all=min_all,
+                       updated_at="2026-07-20 11:00:00")
+    snap = Snapshot(watch_id=w.watch_id, meta=meta, entrants=entrants,
+                    fetched_at=datetime.now(timezone.utc).isoformat())
+    return w, snap
+
+
+def _forecast_store(watches_and_snaps):
+    store = Store(":memory:")
+    watches = []
+    for w, snap in watches_and_snaps:
+        store.save(snap)
+        watches.append(w)
+    cfg = AppConfig(telegram=TelegramConfig(chat_id="", bot_token=""),
+                    heartbeat="on_change_only", tracked_codes=["1366129"], watches=watches)
+    return store, cfg
+
+
+def test_min_score_all_roundtrips_through_snapshot():
+    from vuz_monitor.models import snapshot_from_dict, snapshot_to_dict
+    meta = ProgramMeta(title="Спец", plan=11, min_score=258.0, min_score_all=296.0)
+    snap = Snapshot(watch_id="w1", meta=meta, entrants=[], fetched_at="2026-07-20T00:00:00")
+    back = snapshot_from_dict(snapshot_to_dict(snap))
+    assert back.meta.min_score_all == 296.0
+
+
+def test_gather_forecast_none_without_min_score():
+    # snapshot lacks min_score → not a ВП-flag source → forecast page skipped
+    me = Entrant(code="1366129", code_display="1366129", place=9, final_score=258.0,
+                 priority=1, passing_real=True)
+    w, snap = _forecast_watch("Спец", "МИРЭА — бюджет", None, None, [me])
+    store, cfg = _forecast_store([(w, snap)])
+    assert dashboard._gather_forecast(cfg, store) is None
+    store.close()
+
+
+def test_gather_forecast_excludes_paid():
+    me = Entrant(code="1366129", code_display="1366129", place=5, final_score=258.0,
+                 priority=1, passing_real=True)
+    w, snap = _forecast_watch("Спец", "МИРЭА — платно", 258.0, 296.0, [me])
+    store, cfg = _forecast_store([(w, snap)])
+    assert dashboard._gather_forecast(cfg, store) is None
+    store.close()
+
+
+def test_gather_forecast_place_among_passing_cohort():
+    # 3 passing-ВП above me by score → my forecast place is 4th
+    rivals = [Entrant(code=str(i), code_display=str(i), place=i, final_score=270.0 - i,
+                      priority=1, passing_real=True) for i in range(1, 4)]
+    me = Entrant(code="1366129", code_display="1366129", place=9, final_score=258.0,
+                 priority=2, passing_real=False)
+    # a lower-score passing entrant must NOT count as "above"
+    below = Entrant(code="999", code_display="999", place=20, final_score=250.0,
+                    priority=1, passing_real=True)
+    w, snap = _forecast_watch("Киберфизические", "МИРЭА — бюджет", 250.0, 288.0,
+                              rivals + [me, below], plan=20)
+    store, cfg = _forecast_store([(w, snap)])
+    spec = dashboard._gather_forecast(cfg, store)
+    assert spec is not None
+    row = spec["rows"][0]
+    assert row["forecast"] == 4          # 3 above + me
+    assert row["pass_now"] is True       # 258 >= min_score 250
+    assert row["priority"] == 2
+    store.close()
+
+
+def test_forecast_page_sorted_by_priority_and_renders():
+    p1 = _forecast_watch(
+        "Интеллектуальные системы", "МИРЭА — бюджет", 258.0, 296.0,
+        [Entrant(code="1366129", code_display="1366129", place=9, final_score=258.0,
+                 priority=1, passing_real=True)], plan=11)
+    p3 = _forecast_watch(
+        "Системная инженерия", "МИРЭА — бюджет", 276.0, 299.0,
+        [Entrant(code="1366129", code_display="1366129", place=1545, final_score=258.0,
+                 priority=3, passing_real=False)], plan=12)
+    store, cfg = _forecast_store([p3, p1])   # saved out of order on purpose
+    spec = dashboard._gather_forecast(cfg, store)
+    assert [r["priority"] for r in spec["rows"]] == [1, 3]   # sorted by priority
+    pages = dashboard.render_pages(cfg, store)
+    assert "mirea-forecast.html" in pages
+    html = pages["mirea-forecast.html"]
+    assert "Прогноз по приоритетам" in html
+    assert 'content="noindex' in html          # not indexed
+    assert "1366129" not in html               # tracked code never leaked verbatim
+    # priority-1 passes now, priority-3 does not (258 < 276)
+    assert "прошёл бы сейчас" in html or "прохожу" in html
+    assert "не прошёл бы" in html
+    # guaranteed thresholds present → tile shows "N из 2", not "—"
+    assert "гарантированно" in html
+    store.close()

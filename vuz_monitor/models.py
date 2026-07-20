@@ -48,7 +48,8 @@ class ProgramMeta:
     title: Optional[str] = None
     plan: Optional[int] = None             # budget places (КЦП)
     total: Optional[int] = None            # total applicants
-    min_score: Optional[float] = None
+    min_score: Optional[float] = None      # Проходной ВП floor now (API minScore)
+    min_score_all: Optional[float] = None  # guaranteed floor if all consent (API minScoreByAll = Основной ВП)
     updated_at: Optional[str] = None       # source's own timestamp; change signal
     is_final: bool = False
 

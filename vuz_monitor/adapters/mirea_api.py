@@ -76,6 +76,7 @@ class MireaApiAdapter(Adapter):
             plan=to_int(comp.get("plan")),
             total=to_int(comp.get("appCount")) or len(entrants),
             min_score=to_num(comp.get("minScore")),
+            min_score_all=to_num(comp.get("minScoreByAll")),
             updated_at=comp.get("updatedAt"),
             is_final=bool(comp.get("isFinal")),
         )

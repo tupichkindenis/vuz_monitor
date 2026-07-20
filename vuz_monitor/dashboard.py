@@ -177,7 +177,8 @@ def _changes_section(changes, dropped, now) -> str:
     return f'<section class="ssec"><h2>📈 Что изменилось со вчера</h2>{body}{tail}</section>'
 
 
-def build_status_html(groups, history, now=None, link_scores=False, link_neighbors=False) -> str:
+def build_status_html(groups, history, now=None, link_scores=False, link_neighbors=False,
+                      link_forecast=False) -> str:
     """docs/status.html — командный центр «светофор»: бюджет по 3 корзинам (зелёный
     привязан к passing_real), МАИ отдельно «≈ по месту», платка — «запасной аэродром»."""
     if now is None:
@@ -255,7 +256,8 @@ def build_status_html(groups, history, now=None, link_scores=False, link_neighbo
 
     links = _LINK_CARDS + " " + _LINK_TABLE \
         + (" " + _LINK_SCORES if link_scores else "") \
-        + (" " + _LINK_LIST if link_neighbors else "")
+        + (" " + _LINK_LIST if link_neighbors else "") \
+        + (" " + _LINK_FORECAST if link_forecast else "")
     return (
         "<!doctype html>\n<html lang=\"ru\"><head>\n<meta charset=\"utf-8\">\n"
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
@@ -322,8 +324,10 @@ def render_pages(config, store, now=None) -> dict:
     groups, history = _gather(config, store)
     specs = _gather_score_progress(config, store)
     neighbors = _gather_neighbors(config, store)
+    forecast = _gather_forecast(config, store)
     has_scores = bool(specs)
     has_neighbors = bool(neighbors)
+    has_forecast = forecast is not None
     pages = {}
 
     def _safe(name, fn):
@@ -335,18 +339,25 @@ def render_pages(config, store, now=None) -> dict:
             log.warning("page %s render failed: %s", name, exc)
 
     _safe("index.html", lambda: build_html(groups, history, now=now,
-                                           link_scores=has_scores, link_neighbors=has_neighbors))
+                                           link_scores=has_scores, link_neighbors=has_neighbors,
+                                           link_forecast=has_forecast))
     _safe("table.html", lambda: build_table_html(groups, history, now=now,
-                                                 link_scores=has_scores, link_neighbors=has_neighbors))
+                                                 link_scores=has_scores, link_neighbors=has_neighbors,
+                                                 link_forecast=has_forecast))
     _safe("status.html", lambda: build_status_html(groups, history, now=now,
-                                                   link_scores=has_scores, link_neighbors=has_neighbors))
+                                                   link_scores=has_scores, link_neighbors=has_neighbors,
+                                                   link_forecast=has_forecast))
     if has_scores:
-        _safe("mirea-scores.html", lambda: build_score_progress_html(specs, now=now,
-                                                                     link_neighbors=has_neighbors))
-        _safe("mirea-applications.html", lambda: build_applications_html(specs, now=now,
-                                                                         link_neighbors=has_neighbors))
+        _safe("mirea-scores.html", lambda: build_score_progress_html(
+            specs, now=now, link_neighbors=has_neighbors, link_forecast=has_forecast))
+        _safe("mirea-applications.html", lambda: build_applications_html(
+            specs, now=now, link_neighbors=has_neighbors, link_forecast=has_forecast))
     if has_neighbors:
-        _safe("mirea-list.html", lambda: build_neighbors_html(neighbors, now=now, link_scores=has_scores))
+        _safe("mirea-list.html", lambda: build_neighbors_html(
+            neighbors, now=now, link_scores=has_scores, link_forecast=has_forecast))
+    if has_forecast:
+        _safe("mirea-forecast.html", lambda: build_forecast_html(
+            forecast, now=now, link_scores=has_scores, link_neighbors=has_neighbors))
     return pages
 
 
@@ -420,6 +431,55 @@ def _gather_neighbors(config, store):
             "rows": eligible,
         })
     return specs
+
+
+def _gather_forecast(config, store):
+    """One row per МИРЭА **budget** competition the tracked applicant applied to,
+    for docs/mirea-forecast.html. Reads two official thresholds from each snapshot:
+    `min_score` (Проходной ВП — passing floor per CURRENT consents) and
+    `min_score_all` (Основной ВП — floor if EVERYONE consents, worst case). The
+    forecast «место» is where the applicant would land if this specialty were their
+    top priority: rank by score among the passing-ВП cohort of that group.
+
+    Returns rows sorted by the applicant's priority, plus `my_score` (shared across
+    rows). Empty when the tracked code isn't found in any budget МИРЭА snapshot."""
+    rows = []
+    my_score = None
+    for w in config.watches:
+        if w.adapter != "mirea_api" or is_paid(w.group or w.name):
+            continue
+        snap = store.load_prev(w.watch_id)
+        if snap is None or snap.meta is None or snap.meta.min_score is None:
+            continue
+        our_codes = {normalize_code(c) for c in config.resolve_codes(w)}
+        me = next((e for e in snap.entrants if e.code in our_codes and e.is_active), None)
+        if me is None or me.priority is None:
+            continue
+        score = me.final_score or 0
+        my_score = me.final_score
+        vp = [e for e in snap.entrants if e.is_active and e.passing_real]
+        above = sum(1 for e in vp if (e.final_score or 0) > score)
+        ties = sum(1 for e in vp
+                   if (e.final_score or 0) == score
+                   and e.place is not None and me.place is not None
+                   and e.place < me.place)
+        forecast = above + ties + 1
+        pass_now = snap.meta.min_score is not None and score >= snap.meta.min_score
+        rows.append({
+            "priority": me.priority,
+            "title": snap.meta.title or w.name,
+            "plan": snap.meta.plan,
+            "min_score": snap.meta.min_score,
+            "min_score_all": snap.meta.min_score_all,
+            "forecast": forecast,
+            "vp_count": len(vp),
+            "pass_now": pass_now,
+            "passing_real": bool(me.passing_real),
+        })
+    rows.sort(key=lambda r: r["priority"])
+    if not rows:
+        return None
+    return {"my_score": my_score, "rows": rows}
 
 
 # --------------------------------------------------------------------------- #
@@ -653,6 +713,7 @@ _LINK_CARDS = '<a class="page-link" href="index.html">☰ карточки</a>'
 _LINK_SCORES = '<a class="page-link" href="mirea-scores.html">📊 баллы</a>'
 _LINK_LIST = '<a class="page-link" href="mirea-list.html">👥 окружение</a>'
 _LINK_APPLICATIONS = '<a class="page-link" href="mirea-applications.html">📈 заявки</a>'
+_LINK_FORECAST = '<a class="page-link" href="mirea-forecast.html">🎯 прогноз</a>'
 
 _APP_STYLE = """
 :root{--bg:#fff;--card:#f8fafc;--bd:#e2e8f0;--ink:#0f172a;--ink2:#475569;--mut:#94a3b8;
@@ -730,7 +791,143 @@ def _summary_bar(groups, now, link_html: str = "") -> str:
     )
 
 
-def build_html(groups, history, now=None, link_scores=False, link_neighbors=False) -> str:
+def build_forecast_html(spec, now=None, link_scores=False, link_neighbors=False) -> str:
+    """docs/mirea-forecast.html — прогноз по моим бюджетным приоритетам МИРЭА.
+    По каждой специальности из списка приоритетов: мест, «проходной сейчас»
+    (min_score), «гарантированный» (min_score_all), мой балл и прогноз места.
+    `spec` = {my_score, rows} из `_gather_forecast`, либо None (страница не строится)."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    rows = spec["rows"]
+    my_score = spec["my_score"] or 0
+    pass_now = sum(1 for r in rows if r["pass_now"])
+    alls = [r["min_score_all"] for r in rows if r["min_score_all"] is not None]
+    have_all = bool(alls)  # «гарантированный» порог появляется после часового прогона
+    pass_all = sum(1 for r in rows
+                   if r["min_score_all"] is not None and my_score >= r["min_score_all"])
+    all_lo, all_hi = (min(alls), max(alls)) if alls else (None, None)
+
+    body = []
+    for r in rows:
+        mine = r["passing_real"]
+        pn = r["pass_now"]
+        d = my_score - (r["min_score"] or 0)
+        d_cls = "pos" if d >= 0 else "neg"
+        d_txt = ("+" if d >= 0 else "") + g(d)
+        if mine:
+            verdict = '<span class="v me">прохожу (мой №1)</span>'
+        elif pn:
+            verdict = '<span class="v now">прошёл бы сейчас</span>'
+        else:
+            verdict = '<span class="v no">не прошёл бы</span>'
+        plan = r["plan"]
+        fc = (f'<span class="fc">{r["forecast"]}</span><span class="mut">/{g(plan)}</span>'
+              if pn else f'<span class="mut">&gt;{g(plan)}</span>')
+        col = "var(--accent)" if mine else ("var(--green)" if pn else "var(--red)")
+        frac = (max(6, round(r["forecast"] / plan * 100)) if pn and plan else 100)
+        body.append(
+            f'<tr class="{"me" if mine else ""}">'
+            f'<td class="c"><span class="pr{" p1" if mine else ""}">{r["priority"]}</span></td>'
+            f'<td><div class="prog">{esc(r["title"])}</div>'
+            f'<div class="mbar"><i style="width:{frac}%;background:{col}"></i></div></td>'
+            f'<td class="r">{g(plan)}</td>'
+            f'<td class="r">{g(r["min_score"])}</td>'
+            f'<td class="r mut">{g(r["min_score_all"])}</td>'
+            f'<td class="r"><span class="d {d_cls}">{d_txt}</span></td>'
+            f'<td class="c">{fc}</td>'
+            f'<td>{verdict}</td></tr>'
+        )
+    links = _LINK_CARDS + " " + _LINK_TABLE \
+        + (" " + _LINK_SCORES if link_scores else "") \
+        + (" " + _LINK_LIST if link_neighbors else "")
+    myg = g(my_score)
+    note = (
+        "У МИРЭА два порога. <b>Проходной сейчас</b> — зачислили бы с учётом уже "
+        "поданных согласий; живой снимок. <b>Гарантированный</b> — порог, если "
+        "согласие подадут <b>все</b> допущенные (худший случай). Мой балл "
+        f"<b>{myg}</b> сейчас проходит в <b>{pass_now} из {len(rows)}</b> моих групп"
+    )
+    if have_all:
+        note += (f", но ниже <b>каждого</b> гарантированного порога "
+                 f"({g(all_lo)}–{g(all_hi)}) — в сценарии «все подали согласие» "
+                 f"прошёл бы в {pass_all} из {len(rows)}"
+                 if pass_all < len(rows)
+                 else f"; гарантированно прошёл бы в {pass_all} из {len(rows)}")
+    else:
+        note += " (гарантированный порог появится после ближайшего часового обновления)"
+    note += (". «Прогноз места» — где бы я оказался, сделай я эту специальность "
+             "верхним приоритетом: место по баллу среди проходной ВП-когорты группы.")
+    return (
+        "<!doctype html>\n"
+        '<html lang="ru"><head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="robots" content="noindex, nofollow">\n'
+        "<title>ВУЗ-мониторинг · прогноз по приоритетам</title>\n"
+        f"<style>{_FORECAST_STYLE}</style>\n"
+        "</head><body>\n"
+        '<div class="wrap">\n'
+        '<div class="topbar"><div class="summary"><b>Прогноз по приоритетам</b> · МИРЭА бюджет · '
+        + links + "</div></div>\n"
+        f'<div class="tiles"><div class="tile g"><b>{pass_now} из {len(rows)}</b>'
+        '<span>прошёл бы прямо сейчас (по текущим согласиям)</span></div>'
+        f'<div class="tile r"><b>{str(pass_all) + " из " + str(len(rows)) if have_all else "—"}</b>'
+        '<span>прошёл бы гарантированно — если все подадут согласие</span></div>'
+        f'<div class="tile b"><b>{myg}</b><span>мой балл</span></div></div>\n'
+        f'<div class="note">{note}</div>\n'
+        '<div class="scroll"><table><thead><tr>'
+        '<th class="c">Прио</th><th>Специальность</th><th class="r">Мест</th>'
+        '<th class="r">Проходной<br>сейчас</th><th class="r">Гаранти-<br>рованный</th>'
+        '<th class="r">Балл vs<br>проходной</th><th class="c">Прогноз<br>места</th>'
+        '<th>Вердикт</th></tr></thead><tbody>\n'
+        + "".join(body)
+        + "</tbody></table></div>\n"
+        '<footer class="foot">обновляется каждый час · конкурсы МИРЭА · vuz_monitor</footer>\n'
+        "</div>\n</body></html>\n"
+    )
+
+
+_FORECAST_STYLE = """
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1a1d21;--muted:#6b7280;--border:#e5e7eb;--green:#15803d;--red:#dc2626;--accent:#2563eb;--accent-soft:#dbeafe;--green-bg:#dcfce7;--red-bg:#fee2e2;}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--fg:#e6e8eb;--muted:#9aa4b2;--border:#252b33;--green:#4ade80;--red:#f87171;--accent:#60a5fa;--accent-soft:#17253f;--green-bg:#0f2c1b;--red-bg:#3b1418;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);line-height:1.4;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:900px;margin:0 auto;padding:12px;}
+.topbar{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--border);padding:8px 0;margin-bottom:12px;z-index:5;}
+.summary{font-size:14px;}
+.page-link{color:var(--accent);text-decoration:none;margin-left:8px;font-size:13px;}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;}
+.tile{background:var(--card);border:1px solid var(--border);border-left-width:3px;border-radius:10px;padding:11px 13px;display:flex;flex-direction:column;gap:3px;}
+.tile.g{border-left-color:var(--green);} .tile.r{border-left-color:var(--red);} .tile.b{border-left-color:var(--accent);}
+.tile b{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums;}
+.tile span{font-size:12px;color:var(--muted);}
+.note{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:12px 14px;font-size:13px;color:var(--muted);margin-bottom:14px;}
+.note b{color:var(--fg);}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:10px;background:var(--card);}
+table{border-collapse:collapse;width:100%;min-width:680px;font-size:13px;font-variant-numeric:tabular-nums;}
+thead th{text-align:left;padding:10px 11px;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);font-weight:650;border-bottom:1px solid var(--border);vertical-align:bottom;white-space:nowrap;}
+th.r,td.r{text-align:right;} th.c,td.c{text-align:center;}
+tbody td{padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:middle;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr.me{background:var(--accent-soft);}
+.pr{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:21px;border-radius:6px;font-weight:700;font-size:12px;background:var(--border);color:var(--fg);}
+.pr.p1{background:var(--accent);color:#fff;}
+.prog{font-weight:600;font-size:12.5px;}
+.mbar{position:relative;height:4px;border-radius:2px;background:var(--border);margin-top:4px;overflow:hidden;max-width:280px;}
+.mbar i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;}
+.mut{color:var(--muted);}
+.d.pos{color:var(--green);} .d.neg{color:var(--red);}
+.fc{font-weight:650;}
+.v{font-weight:600;font-size:12px;white-space:nowrap;}
+.v.now{color:var(--green);} .v.no{color:var(--red);} .v.me{color:var(--accent);}
+.foot{color:var(--muted);font-size:12px;text-align:center;margin:18px 0 6px;}
+"""
+
+
+def build_html(groups, history, now=None, link_scores=False, link_neighbors=False,
+               link_forecast=False) -> str:
     """Render the full page. `groups` = group_reports() output; `history` =
     {(watch_id, code_display): [daily points]}."""
     if now is None:
@@ -767,7 +964,8 @@ def build_html(groups, history, now=None, link_scores=False, link_neighbors=Fals
         '<div class="topbar">'
         + _summary_bar(groups, now, _LINK_TABLE + " " + _LINK_STATUS
                        + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
-                       + (" " + _LINK_LIST if link_neighbors else ""))
+                       + (" " + _LINK_LIST if link_neighbors else "")
+                       + (" " + _LINK_FORECAST if link_forecast else ""))
         + filters
         + "</div>\n"
         + _LEGEND + "\n"
@@ -885,7 +1083,8 @@ _TABLE_HEADERS = [
 ]
 
 
-def build_table_html(groups, history, now=None, link_scores=False, link_neighbors=False) -> str:
+def build_table_html(groups, history, now=None, link_scores=False, link_neighbors=False,
+                     link_forecast=False) -> str:
     """Desktop one-table view: row = specialty, columns = all params, sortable,
     with ВУЗ/основа filter chips and a place-trend sparkline column."""
     if now is None:
@@ -926,7 +1125,8 @@ def build_table_html(groups, history, now=None, link_scores=False, link_neighbor
         '<div class="wrap-wide">\n'
         '<div class="topbar">' + _summary_bar(groups, now, _LINK_CARDS + " " + _LINK_STATUS
             + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
-            + (" " + _LINK_LIST if link_neighbors else "")) + filters + "</div>\n"
+            + (" " + _LINK_LIST if link_neighbors else "")
+            + (" " + _LINK_FORECAST if link_forecast else "")) + filters + "</div>\n"
         '<p class="no-match" hidden>Нет строк под выбранный фильтр.</p>\n'
         '<div class="table-scroll"><table id="grid"><thead><tr>'
         + thead + "</tr></thead><tbody>\n" + tbody + "\n</tbody></table></div>\n"
@@ -1135,7 +1335,8 @@ def _app_section(spec) -> str:
     )
 
 
-def build_applications_html(specialties, now=None, link_neighbors=False) -> str:
+def build_applications_html(specialties, now=None, link_neighbors=False,
+                            link_forecast=False) -> str:
     """docs/mirea-applications.html — динамика числа заявок по дням, одна секция
     на каждую track_scores специальность. Регенерируется из state.db каждый час."""
     if now is None:
@@ -1145,7 +1346,8 @@ def build_applications_html(specialties, now=None, link_neighbors=False) -> str:
     sections = "".join(_app_section(s) for s in specialties) \
         or '<p class="empty">Нет данных о заявках (нужен track_scores).</p>'
     links = _LINK_CARDS + " " + _LINK_TABLE + " " + _LINK_SCORES \
-        + (" " + _LINK_LIST if link_neighbors else "")
+        + (" " + _LINK_LIST if link_neighbors else "") \
+        + (" " + _LINK_FORECAST if link_forecast else "")
     return (
         "<!doctype html>\n<html lang=\"ru\"><head>\n<meta charset=\"utf-8\">\n"
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
@@ -1264,7 +1466,8 @@ def _score_section(spec, now) -> str:
     )
 
 
-def build_score_progress_html(specialties, now=None, link_neighbors=False) -> str:
+def build_score_progress_html(specialties, now=None, link_neighbors=False,
+                              link_forecast=False) -> str:
     """docs/mirea-scores.html — score-loading tracker: intraday comparison
     (конец вчера · 10:00 · 14:00 · 19:00 · Изменение), range distribution across
     the same slots, and a trend sparkline, per tracked competition."""
@@ -1275,7 +1478,8 @@ def build_score_progress_html(specialties, now=None, link_neighbors=False) -> st
     sections = "".join(_score_section(s, now) for s in specialties) or \
         '<p class="empty">Нет отслеживаемых конкурсов.</p>'
     links = _LINK_CARDS + " " + _LINK_TABLE + " " + _LINK_STATUS + " " + _LINK_APPLICATIONS \
-        + (" " + _LINK_LIST if link_neighbors else "")
+        + (" " + _LINK_LIST if link_neighbors else "") \
+        + (" " + _LINK_FORECAST if link_forecast else "")
     return (
         "<!doctype html>\n"
         '<html lang="ru"><head>\n'
@@ -1408,7 +1612,7 @@ def _neighbor_section(spec, now) -> str:
     )
 
 
-def build_neighbors_html(specs, now=None, link_scores=False) -> str:
+def build_neighbors_html(specs, now=None, link_scores=False, link_forecast=False) -> str:
     """docs/mirea-list.html — «окружение»: одна секция на каждый track_neighbors
     конкурс. Фильтр зависит от типа: платный — «Соблюдены условия для платного»
     (consent = API accepted); бюджетный — «Проходной ВП» (passing_real = API iHPO).
@@ -1421,7 +1625,8 @@ def build_neighbors_html(specs, now=None, link_scores=False) -> str:
     sections = "".join(_neighbor_section(s, now) for s in specs) or \
         '<p class="empty">Нет отслеживаемых списков.</p>'
     links = _LINK_CARDS + " " + _LINK_TABLE + " " + _LINK_STATUS \
-        + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "")
+        + (" " + _LINK_SCORES + " " + _LINK_APPLICATIONS if link_scores else "") \
+        + (" " + _LINK_FORECAST if link_forecast else "")
     return (
         "<!doctype html>\n"
         '<html lang="ru"><head>\n'
